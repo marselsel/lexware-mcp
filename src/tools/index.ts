@@ -1,0 +1,47 @@
+import type { McpServer } from "skybridge/server";
+import type { Config } from "../config.js";
+import type { LexwareClient } from "../lexware/client.js";
+import { registerArticleReadTools, registerArticleWriteTools } from "./articles.js";
+import { registerContactDraftTools, registerContactReadTools } from "./contacts.js";
+import {
+  registerDocumentDraftTools,
+  registerDocumentFinalizeTools,
+  registerDocumentReadTools,
+} from "./documents.js";
+import {
+  registerEventSubscriptionDeleteTools,
+  registerEventSubscriptionReadTools,
+  registerEventSubscriptionWriteTools,
+} from "./event-subscriptions.js";
+import { registerProfileTools } from "./profile.js";
+import { registerReferenceReadTools } from "./reference.js";
+
+/**
+ * Register MCP tools according to the resolved capability tiers. Only enabled
+ * tiers are registered — a disabled tool is never advertised to the model.
+ */
+export function registerTools(server: McpServer, client: LexwareClient, config: Config): void {
+  const { capabilities } = config;
+
+  // Read tier — always on.
+  registerProfileTools(server, client);
+  registerContactReadTools(server, client);
+  registerArticleReadTools(server, client);
+  registerDocumentReadTools(server, client, config.lexwareAppBaseUrl);
+  registerReferenceReadTools(server, client);
+  registerEventSubscriptionReadTools(server, client);
+
+  // Draft / write tier (create drafts + non-binding updates).
+  if (capabilities.drafts) {
+    registerContactDraftTools(server, client);
+    registerArticleWriteTools(server, client);
+    registerDocumentDraftTools(server, client);
+    registerEventSubscriptionWriteTools(server, client);
+  }
+
+  // Finalize / binding & irreversible tier.
+  if (capabilities.finalize) {
+    registerDocumentFinalizeTools(server, client);
+    registerEventSubscriptionDeleteTools(server, client);
+  }
+}
