@@ -1,0 +1,8 @@
+node_modules
+.git
+dist
+.env*
+
+.agents
+.github
+tests

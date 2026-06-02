@@ -1,0 +1,13 @@
+services:
+  lexware-mcp:
+    build: .
+    image: lexware-mcp
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+    # Put LEXWARE_API_KEY and MCP_AUTH_TOKEN (and any capability flags) in a
+    # local .env file (see .env.example). Never commit real secrets.
+    env_file:
+      - .env
+    restart: unless-stopped

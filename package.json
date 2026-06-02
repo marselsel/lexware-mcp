@@ -1,0 +1,38 @@
+{
+  "name": "lexware-mcp",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "description": "Open-source, self-hostable MCP server for the Lexware Office API",
+  "type": "module",
+  "scripts": {
+    "dev": "skybridge dev",
+    "dev:tunnel": "skybridge dev --tunnel",
+    "build": "tsc -b --force",
+    "build:views": "skybridge build",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -b --force",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "alpic deploy"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "jose": "^6.2.3",
+    "skybridge": "^1.0.3",
+    "vite": "^8.0.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@skybridge/devtools": "^1.0.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.12.0",
+    "alpic": "^1.104.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.8"
+  },
+  "engines": {
+    "node": ">=24.14.1"
+  }
+}
