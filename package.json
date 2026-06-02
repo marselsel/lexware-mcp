@@ -19,7 +19,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "jose": "^6.2.3",
-    "skybridge": "^1.0.3",
+    "skybridge": "^1.0.4",
     "vite": "^8.0.3",
     "zod": "^4.4.3"
   },
