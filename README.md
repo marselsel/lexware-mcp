@@ -6,8 +6,8 @@ connect it to Claude, and let an agent read your invoices, vouchers, contacts an
 and (optionally) draft new ones.
 
 Bring your own Lexware API key — the server is single-tenant per deployment and never stores
-anyone else's credentials. It runs as a remote HTTP server (e.g. on Google Cloud Run), built
-with the [Skybridge](https://docs.skybridge.tech) framework.
+anyone else's credentials. It runs as a remote HTTP server on any container host, built with
+the [Skybridge](https://docs.skybridge.tech) framework.
 
 **Two authentication methods — choose one:**
 - **OAuth 2.1** — required to use this as a **web MCP server / custom connector** in the
@@ -104,7 +104,7 @@ LEXWARE_API_KEY=... MCP_AUTH_TOKEN=... npm start
 | `LEXWARE_ENABLE_FINALIZE` | `false` | Enable finalize / legally-binding tools |
 | `LEXWARE_API_BASE_URL` | `https://api.lexware.io` | API base URL |
 | `LEXWARE_APP_BASE_URL` | `https://app.lexware.de` | Web-app base for document deeplinks |
-| `PORT` | `8080` | Listen port (Cloud Run injects this) |
+| `PORT` | `8080` | Listen port (your platform may inject this) |
 | `LEXWARE_DEBUG_LOGGING` | `false` | Verbose logs (never secrets/bodies) |
 
 ¹ The server needs **either** `OAUTH_ISSUER` (OAuth) **or** `MCP_AUTH_TOKEN` (static). It
@@ -126,29 +126,25 @@ Add to your MCP config (e.g. `~/.claude.json` or the Desktop config):
 }
 ```
 
-## Deploy to Google Cloud Run
+## Deploy
 
-Store secrets in Secret Manager, then deploy from source (Cloud Build builds the Dockerfile):
+The server is a standard Docker container ([Dockerfile](Dockerfile)) — run it on any host
+that can serve HTTPS (a VPS, Fly.io, Render, Railway, Cloud Run, Kubernetes, …):
 
 ```bash
-gcloud secrets create lexware-api-key --replication-policy=automatic
-printf '%s' "<your-lexware-key>" | gcloud secrets versions add lexware-api-key --data-file=-
-
-gcloud secrets create mcp-auth-token --replication-policy=automatic
-openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add mcp-auth-token --data-file=-
-
-gcloud run deploy lexware-mcp \
-  --source . \
-  --region <region> \
-  --allow-unauthenticated \
-  --max-instances=1 \
-  --set-secrets LEXWARE_API_KEY=lexware-api-key:latest,MCP_AUTH_TOKEN=mcp-auth-token:latest
+docker build -t lexware-mcp .
+docker run -p 8080:8080 --env-file .env lexware-mcp
 ```
 
-- `--allow-unauthenticated` is safe: our own bearer-token middleware gates `/mcp`.
-- **`--max-instances=1`** keeps the per-instance ~2 req/s rate limiter accurate (multiple
-  instances would aggregate beyond Lexware's limit and get throttled).
-- Health check: `GET /status` (note: not `/healthz` — Google Front End intercepts that path on Cloud Run).
+Production notes:
+- Serve over **HTTPS** (terminate TLS at your platform or a reverse proxy).
+- Set auth via env (`OAUTH_ISSUER…` or `MCP_AUTH_TOKEN`) — the server fails closed otherwise.
+- **Run a single instance** (or cap autoscaling to 1): the ~2 req/s rate limiter is
+  per-process, so multiple instances would aggregate beyond Lexware's limit.
+- Health check: `GET /status` (returns `200`).
+
+**Google Cloud Run:** a step-by-step recipe (Secret Manager + `gcloud run deploy` + custom
+domain) is in [docs/cloud-run.md](docs/cloud-run.md).
 
 ## How it works
 
