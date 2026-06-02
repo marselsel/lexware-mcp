@@ -86,6 +86,29 @@ describe("LexwareClient", () => {
     expect(n).toBe(2);
   });
 
+  it("passes an abort signal and retries an idempotent GET that times out", async () => {
+    let n = 0;
+    const fetchFn = vi.fn(async (_url, init) => {
+      expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal);
+      n += 1;
+      if (n === 1) throw new DOMException("The operation timed out.", "TimeoutError");
+      return json({ ok: true });
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const res = await client.get<{ ok: boolean }>("/v1/profile");
+    expect(res.ok).toBe(true);
+    expect(n).toBe(2);
+  });
+
+  it("does NOT retry a POST that times out (no duplicate writes)", async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    await expect(client.post("/v1/invoices", { a: 1 })).rejects.toMatchObject({ status: 0 });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it("retries idempotent GETs on 5xx", async () => {
     let n = 0;
     const fetchFn = vi.fn(async () => {

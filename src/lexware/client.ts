@@ -14,6 +14,8 @@ export interface LexwareClientOptions {
   random?: () => number;
   /** Max retry attempts for retryable failures (429 / transient). Default 4. */
   maxRetries?: number;
+  /** Abort an in-flight request after this many ms (a hung upstream otherwise blocks forever). Default 30000. */
+  requestTimeoutMs?: number;
   rateLimit?: { capacity: number; refillPerSec: number };
 }
 
@@ -43,6 +45,7 @@ export class LexwareClient {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
   private readonly maxRetries: number;
+  private readonly requestTimeoutMs: number;
   private readonly limiter: RateLimiter;
 
   constructor(opts: LexwareClientOptions) {
@@ -53,6 +56,7 @@ export class LexwareClient {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.random = opts.random ?? Math.random;
     this.maxRetries = opts.maxRetries ?? 4;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
     const rl = opts.rateLimit ?? { capacity: 2, refillPerSec: 2 };
     this.limiter = new RateLimiter(rl.capacity, rl.refillPerSec, opts.now, this.sleep);
   }
@@ -85,10 +89,15 @@ export class LexwareClient {
 
       let res: Response;
       try {
-        res = await this.fetchFn(url, { method, headers, body: bodyText });
+        res = await this.fetchFn(url, {
+          method,
+          headers,
+          body: bodyText,
+          signal: AbortSignal.timeout(this.requestTimeoutMs),
+        });
       } catch (err) {
-        // Transport failure (DNS, timeout, reset). The request may or may not
-        // have reached Lexware, so only retry idempotent calls.
+        // Transport failure (DNS, reset) or our own request timeout (AbortSignal).
+        // The request may or may not have reached Lexware, so only retry idempotent calls.
         if (opts.idempotent && attempt < this.maxRetries) {
           await this.backoff(attempt++);
           continue;

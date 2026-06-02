@@ -96,7 +96,7 @@ LEXWARE_API_KEY=... MCP_AUTH_TOKEN=... npm start
 | `OAUTH_ISSUER` | — | OAuth authorization-server issuer URL. Setting it enables OAuth mode¹ |
 | `OAUTH_RESOURCE` / `SERVER_URL` | — | This server's public URL (token audience / Resource Indicator). Required in OAuth mode |
 | `OAUTH_ALLOWED_EMAIL_DOMAINS` | — | Comma-separated allow-list of email domains (e.g. `example.com`) |
-| `OAUTH_VERIFY_AUDIENCE` | `true` | Verify the token `aud`; set `false` if your provider has no Resource Indicator |
+| `OAUTH_VERIFY_AUDIENCE` | `true` | Verify the token `aud` matches `OAUTH_RESOURCE`. **Keep `true`.** Setting `false` accepts *any* valid token from the issuer — including one minted for a different app on the same issuer (a confused-deputy risk). Only disable for a dedicated, single-audience issuer that has no Resource Indicator |
 | `MCP_AUTH_TOKEN` | — (**required**¹) | Static bearer token clients send to reach `/mcp` (used when OAuth is off) |
 | `MCP_ALLOW_UNAUTHENTICATED` | `false` | Opt out of auth (trusted local use only) |
 | `LEXWARE_READ_ONLY` | `false` | Register only read tools (hard override) |

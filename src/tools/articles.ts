@@ -41,7 +41,7 @@ export function registerArticleReadTools(server: McpServer, client: LexwareClien
       annotations: RO,
     },
     async ({ id }) => {
-      const article = await client.get<Record<string, unknown>>(`/v1/articles/${id}`);
+      const article = await client.get<Record<string, unknown>>(`/v1/articles/${encodeURIComponent(id)}`);
       return {
         structuredContent: article,
         content: text(`Article ${id}: ${(article.title as string) ?? ""}`),
@@ -80,7 +80,7 @@ export function registerArticleWriteTools(server: McpServer, client: LexwareClie
     async ({ id, ...body }) => {
       const updated = await client.request<{ id: string; version: number }>(
         "PUT",
-        `/v1/articles/${id}`,
+        `/v1/articles/${encodeURIComponent(id)}`,
         { body, idempotent: false },
       );
       return {

@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env*
+# …but DO commit the documented, secret-free template:
+!.env.example
 .DS_store
 *.tsbuildinfo
 .skybridge/

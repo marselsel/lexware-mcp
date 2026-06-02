@@ -25,7 +25,7 @@ export function registerEventSubscriptionReadTools(server: McpServer, client: Le
       annotations: RO,
     },
     async ({ id }) => {
-      const sub = await client.get<Record<string, unknown>>(`/v1/event-subscriptions/${id}`);
+      const sub = await client.get<Record<string, unknown>>(`/v1/event-subscriptions/${encodeURIComponent(id)}`);
       return { structuredContent: sub, content: text(`Event subscription ${id} retrieved.`) };
     },
   );
@@ -71,7 +71,7 @@ export function registerEventSubscriptionDeleteTools(server: McpServer, client: 
       annotations: DESTRUCTIVE,
     },
     async ({ id }) => {
-      await client.request<unknown>("DELETE", `/v1/event-subscriptions/${id}`, { idempotent: true });
+      await client.request<unknown>("DELETE", `/v1/event-subscriptions/${encodeURIComponent(id)}`, { idempotent: true });
       return {
         structuredContent: { id, deleted: true },
         content: text(`Deleted event subscription ${id}.`),

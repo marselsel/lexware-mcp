@@ -96,7 +96,7 @@ export function registerDocumentReadTools(
         annotations: RO,
       },
       async ({ id }) => {
-        const document = await client.get<Record<string, unknown>>(`/v1/${doc.path}/${id}`);
+        const document = await client.get<Record<string, unknown>>(`/v1/${doc.path}/${encodeURIComponent(id)}`);
         return { structuredContent: document, content: text(`${doc.label} ${id} retrieved.`) };
       },
     );
@@ -111,7 +111,7 @@ export function registerDocumentReadTools(
       annotations: RO,
     },
     async ({ id }) => {
-      const voucher = await client.get<Record<string, unknown>>(`/v1/vouchers/${id}`);
+      const voucher = await client.get<Record<string, unknown>>(`/v1/vouchers/${encodeURIComponent(id)}`);
       return { structuredContent: voucher, content: text(`Voucher ${id} retrieved.`) };
     },
   );
@@ -130,7 +130,7 @@ export function registerDocumentReadTools(
     },
     async ({ resourceType, id, action }) => {
       // Lexware permalink format: {app}/permalink/{resourceType}/{action}/{id}
-      const url = `${appBaseUrl}/permalink/${resourceType}/${action}/${id}`;
+      const url = `${appBaseUrl}/permalink/${resourceType}/${action}/${encodeURIComponent(id)}`;
       return { structuredContent: { url }, content: text(`Open in Lexware: ${url}`) };
     },
   );

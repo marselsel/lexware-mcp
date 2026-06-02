@@ -45,7 +45,7 @@ export function registerContactReadTools(server: McpServer, client: LexwareClien
       annotations: RO,
     },
     async ({ id }) => {
-      const contact = await client.get<Record<string, unknown>>(`/v1/contacts/${id}`);
+      const contact = await client.get<Record<string, unknown>>(`/v1/contacts/${encodeURIComponent(id)}`);
       return { structuredContent: contact, content: text(`Contact ${id} retrieved.`) };
     },
   );
@@ -89,7 +89,7 @@ export function registerContactDraftTools(server: McpServer, client: LexwareClie
       }
       const updated = await client.request<{ id: string; version: number }>(
         "PUT",
-        `/v1/contacts/${id}`,
+        `/v1/contacts/${encodeURIComponent(id)}`,
         { body, idempotent: false },
       );
       return {

@@ -31,7 +31,7 @@ export function registerReferenceReadTools(server: McpServer, client: LexwareCli
       annotations: RO,
     },
     async ({ id }) => {
-      const payment = await client.get<Record<string, unknown>>(`/v1/payments/${id}`);
+      const payment = await client.get<Record<string, unknown>>(`/v1/payments/${encodeURIComponent(id)}`);
       return { structuredContent: payment, content: text(`Payment info for ${id} retrieved.`) };
     },
   );
@@ -44,7 +44,7 @@ export function registerReferenceReadTools(server: McpServer, client: LexwareCli
       annotations: RO,
     },
     async ({ id }) => {
-      const tmpl = await client.get<Record<string, unknown>>(`/v1/recurring-templates/${id}`);
+      const tmpl = await client.get<Record<string, unknown>>(`/v1/recurring-templates/${encodeURIComponent(id)}`);
       return { structuredContent: tmpl, content: text(`Recurring template ${id} retrieved.`) };
     },
   );

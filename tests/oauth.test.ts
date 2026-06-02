@@ -1,6 +1,11 @@
 import * as jose from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createAccessTokenVerifier, isEmailDomainAllowed, type OAuthSettings } from "../src/oauth.js";
+import {
+  createAccessTokenVerifier,
+  isEmailDomainAllowed,
+  isEmailVerified,
+  type OAuthSettings,
+} from "../src/oauth.js";
 
 const ISSUER = "https://auth.example.com";
 const RESOURCE = "https://mcp.example.com";
@@ -37,7 +42,10 @@ beforeAll(async () => {
 });
 
 const okFetch = (email: string): typeof fetch =>
-  (async () => new Response(JSON.stringify({ email }), { headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  (async () =>
+    new Response(JSON.stringify({ email, email_verified: true }), {
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
 
 describe("isEmailDomainAllowed", () => {
   it("matches case-insensitively", () => {
@@ -45,6 +53,22 @@ describe("isEmailDomainAllowed", () => {
     expect(isEmailDomainAllowed("a@evil.com", ["example.com"])).toBe(false);
     expect(isEmailDomainAllowed(undefined, ["example.com"])).toBe(false);
     expect(isEmailDomainAllowed("noatsign", ["example.com"])).toBe(false);
+  });
+
+  it("uses the domain after the LAST @ (resists a@allowed.com@evil.com)", () => {
+    expect(isEmailDomainAllowed("a@allowed.com@evil.com", ["allowed.com"])).toBe(false);
+    expect(isEmailDomainAllowed("a@allowed.com@evil.com", ["evil.com"])).toBe(true);
+  });
+});
+
+describe("isEmailVerified", () => {
+  it("accepts only an explicit true (boolean or string); fails closed otherwise", () => {
+    expect(isEmailVerified(true)).toBe(true);
+    expect(isEmailVerified("true")).toBe(true);
+    expect(isEmailVerified(false)).toBe(false);
+    expect(isEmailVerified("false")).toBe(false);
+    expect(isEmailVerified(undefined)).toBe(false);
+    expect(isEmailVerified(1)).toBe(false);
   });
 });
 
@@ -83,13 +107,13 @@ describe("createAccessTokenVerifier", () => {
 
   it("allows an email-claim domain that is permitted", async () => {
     const verify = createAccessTokenVerifier(settings({ allowedEmailDomains: ["example.com"] }), { jwks });
-    const token = await sign({ sub: "u", email: "user@example.com" });
+    const token = await sign({ sub: "u", email: "user@example.com", email_verified: true });
     await expect(verify(token)).resolves.toMatchObject({ extra: { email: "user@example.com" } });
   });
 
   it("rejects an email-claim domain that is not permitted", async () => {
     const verify = createAccessTokenVerifier(settings({ allowedEmailDomains: ["example.com"] }), { jwks });
-    const token = await sign({ sub: "u", email: "attacker@evil.com" });
+    const token = await sign({ sub: "u", email: "attacker@evil.com", email_verified: true });
     await expect(verify(token)).rejects.toThrow(/domain is not permitted/);
   });
 
@@ -102,13 +126,35 @@ describe("createAccessTokenVerifier", () => {
     await expect(verify(token)).resolves.toMatchObject({ extra: { sub: "u" } });
   });
 
+  it("rejects an unverified email claim even when its domain is allowed", async () => {
+    const verify = createAccessTokenVerifier(settings({ allowedEmailDomains: ["example.com"] }), {
+      jwks,
+      // userinfo can't rescue it either:
+      fetchFn: (async () => new Response("no", { status: 401 })) as unknown as typeof fetch,
+    });
+    const token = await sign({ sub: "u", email: "user@example.com", email_verified: false });
+    await expect(verify(token)).rejects.toThrow(/domain is not permitted/);
+  });
+
+  it("rejects an unverified userinfo email", async () => {
+    const verify = createAccessTokenVerifier(settings({ allowedEmailDomains: ["example.com"] }), {
+      jwks,
+      fetchFn: (async () =>
+        new Response(JSON.stringify({ email: "user@example.com", email_verified: false }), {
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    });
+    const token = await sign({ sub: "u" });
+    await expect(verify(token)).rejects.toThrow(/domain is not permitted/);
+  });
+
   it("does not cache userinfo misses — a valid user isn't locked out after a transient outage", async () => {
     let call = 0;
     const fetchFn = (async () => {
       call += 1;
       return call === 1
         ? new Response("down", { status: 503 })
-        : new Response(JSON.stringify({ email: "user@example.com" }), {
+        : new Response(JSON.stringify({ email: "user@example.com", email_verified: true }), {
             headers: { "content-type": "application/json" },
           });
     }) as unknown as typeof fetch;

@@ -19,7 +19,11 @@ export interface OAuthSettings {
 /** True when `email`'s domain is in `allowed` (case-insensitive). Pure; unit-tested. */
 export function isEmailDomainAllowed(email: string | undefined, allowed: string[]): boolean {
   if (!email) return false;
-  const domain = email.split("@")[1]?.toLowerCase();
+  // Split on the LAST "@" so an address like `a@allowed.com@evil.com` resolves to
+  // `evil.com`, not the attacker-chosen middle segment `split("@")[1]` would return.
+  const at = email.lastIndexOf("@");
+  if (at < 0) return false;
+  const domain = email.slice(at + 1).toLowerCase();
   if (!domain) return false;
   return allowed.map((d) => d.toLowerCase()).includes(domain);
 }
@@ -44,17 +48,39 @@ export function buildOAuthMetadata(oauth: OAuthSettings): OAuthMetadata {
   };
 }
 
-/** Fetch the user's email from the OIDC userinfo endpoint, or undefined on failure. */
-async function fetchUserinfoEmail(
+/** Network timeout for the userinfo lookup so a hung IdP can't block a request indefinitely. */
+const USERINFO_TIMEOUT_MS = 10_000;
+
+/**
+ * OIDC `email_verified` is a boolean; some providers serialize it as the string
+ * "true". Treat only an explicit true as verified and fail closed otherwise: an
+ * absent or false value must NOT satisfy the email-domain allow-list, or a user who
+ * self-asserts an unverified address in an allowed domain could slip through.
+ */
+export function isEmailVerified(claim: unknown): boolean {
+  return claim === true || claim === "true";
+}
+
+/**
+ * Fetch the user's email from the OIDC userinfo endpoint — but only return it when
+ * the provider reports it as verified. Returns undefined on any failure/timeout or
+ * when the email is unverified.
+ */
+async function fetchVerifiedUserinfoEmail(
   token: string,
   userinfoUrl: string,
   fetchFn: typeof fetch,
 ): Promise<string | undefined> {
   try {
-    const res = await fetchFn(userinfoUrl, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchFn(userinfoUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(USERINFO_TIMEOUT_MS),
+    });
     if (!res.ok) return undefined;
     const data = (await res.json()) as Record<string, unknown>;
-    return typeof data.email === "string" ? data.email : undefined;
+    const email = typeof data.email === "string" ? data.email : undefined;
+    if (!email) return undefined;
+    return isEmailVerified(data.email_verified) ? email : undefined;
   } catch {
     return undefined;
   }
@@ -100,7 +126,12 @@ export function createAccessTokenVerifier(oauth: OAuthSettings, deps: VerifierDe
     const sub = typeof payload.sub === "string" ? payload.sub : "";
     if (!sub) throw new InvalidTokenError("Token is missing the sub claim");
 
-    let email = typeof payload.email === "string" ? payload.email : undefined;
+    // Trust the email for authorization only when the IdP marked it verified; an
+    // unverified token email falls through to the (also verification-checked) userinfo lookup.
+    let email =
+      typeof payload.email === "string" && isEmailVerified(payload.email_verified)
+        ? payload.email
+        : undefined;
 
     if (oauth.allowedEmailDomains.length > 0) {
       if (!email) {
@@ -109,9 +140,9 @@ export function createAccessTokenVerifier(oauth: OAuthSettings, deps: VerifierDe
         if (cached && cached.exp > nowSec) {
           email = cached.email;
         } else {
-          email = await fetchUserinfoEmail(token, oauth.userinfoUrl, fetchFn);
-          // Cache only positive results: caching a transient miss would lock out
-          // a valid user until their token expires.
+          email = await fetchVerifiedUserinfoEmail(token, oauth.userinfoUrl, fetchFn);
+          // Cache only positive (verified) results: caching a transient miss would
+          // lock out a valid user until their token expires.
           if (email) {
             const exp = typeof payload.exp === "number" ? payload.exp : nowSec + 300;
             if (emailCache.size >= MAX_EMAIL_CACHE_ENTRIES) {
