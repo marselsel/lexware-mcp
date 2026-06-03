@@ -114,6 +114,16 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base(), LEXWARE_API_BASE_URL: "ftp://x" } as NodeJS.ProcessEnv)).toThrow(ConfigError);
   });
 
+  it("requires HTTPS for config URLs (http allowed only for localhost)", () => {
+    expect(() =>
+      loadConfig({ ...base(), OAUTH_ISSUER: "http://auth.example.com", SERVER_URL: "https://x.example.com" } as NodeJS.ProcessEnv),
+    ).toThrow(/https/);
+    expect(() => loadConfig({ ...base(), LEXWARE_API_BASE_URL: "http://evil.example.com" } as NodeJS.ProcessEnv)).toThrow(/https/);
+    // http on localhost is allowed (local mocks / testing).
+    const c = loadConfig({ ...base(), LEXWARE_API_BASE_URL: "http://localhost:9000" } as NodeJS.ProcessEnv);
+    expect(c.lexwareApiBaseUrl).toBe("http://localhost:9000");
+  });
+
   it("describeCapabilities is secret-free and informative", () => {
     const c = loadConfig(base());
     const s = describeCapabilities(c);

@@ -1,6 +1,7 @@
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { createHash } from "node:crypto";
 import * as jose from "jose";
 
 /** Upper bound on the userinfo email cache to prevent unbounded growth. */
@@ -136,7 +137,9 @@ export function createAccessTokenVerifier(oauth: OAuthSettings, deps: VerifierDe
     if (oauth.allowedEmailDomains.length > 0) {
       if (!email) {
         const nowSec = Math.floor(Date.now() / 1000);
-        const cached = emailCache.get(token);
+        // Key the cache by a hash of the token, not the raw bearer (smaller blast radius).
+        const cacheKey = createHash("sha256").update(token).digest("base64url");
+        const cached = emailCache.get(cacheKey);
         if (cached && cached.exp > nowSec) {
           email = cached.email;
         } else {
@@ -150,7 +153,7 @@ export function createAccessTokenVerifier(oauth: OAuthSettings, deps: VerifierDe
               for (const [k, v] of emailCache) if (v.exp <= nowSec) emailCache.delete(k);
               if (emailCache.size >= MAX_EMAIL_CACHE_ENTRIES) emailCache.clear();
             }
-            emailCache.set(token, { email, exp });
+            emailCache.set(cacheKey, { email, exp });
           }
         }
       }

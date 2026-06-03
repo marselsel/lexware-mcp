@@ -3,6 +3,11 @@ dist/
 .env*
 # …but DO commit the documented, secret-free template:
 !.env.example
+# Never commit private keys / certs:
+*.pem
+*.cer
+*.key
+*.p12
 .DS_store
 *.tsbuildinfo
 .skybridge/
