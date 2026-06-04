@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
 import { articleInputShape } from "./schemas.js";
-import { DEFAULT_PAGE_SIZE, RO, WRITE, pagedResult, text } from "./shared.js";
+import { DEFAULT_PAGE_SIZE, DESTRUCTIVE, RO, WRITE, pagedResult, text } from "./shared.js";
 
 /** Read tools for articles (products/services). Always registered. */
 export function registerArticleReadTools(server: McpServer, client: LexwareClient): void {
@@ -86,6 +86,30 @@ export function registerArticleWriteTools(server: McpServer, client: LexwareClie
       return {
         structuredContent: updated,
         content: text(`Updated article ${id} (now version ${updated.version}).`),
+      };
+    },
+  );
+}
+
+/**
+ * Destructive delete for articles. Registered with the finalize tier (off by
+ * default) so an irreversible delete is never enabled by drafts alone.
+ */
+export function registerArticleDeleteTools(server: McpServer, client: LexwareClient): void {
+  server.registerTool(
+    {
+      name: "delete-article",
+      description: "Delete an article (product/service) by id. This is irreversible.",
+      inputSchema: { id: z.string() },
+      annotations: DESTRUCTIVE,
+    },
+    async ({ id }) => {
+      await client.request<unknown>("DELETE", `/v1/articles/${encodeURIComponent(id)}`, {
+        idempotent: true,
+      });
+      return {
+        structuredContent: { id, deleted: true },
+        content: text(`Deleted article ${id}.`),
       };
     },
   );

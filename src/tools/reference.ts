@@ -1,7 +1,7 @@
 import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
-import { RO, text } from "./shared.js";
+import { DEFAULT_PAGE_SIZE, RO, text } from "./shared.js";
 
 /**
  * Read-only reference + supporting data. Always registered.
@@ -46,6 +46,22 @@ export function registerReferenceReadTools(server: McpServer, client: LexwareCli
     async ({ id }) => {
       const tmpl = await client.get<Record<string, unknown>>(`/v1/recurring-templates/${encodeURIComponent(id)}`);
       return { structuredContent: tmpl, content: text(`Recurring template ${id} retrieved.`) };
+    },
+  );
+
+  server.registerTool(
+    {
+      name: "list-recurring-templates",
+      description: "List recurring-invoice templates. Results may be paged (use page/size).",
+      inputSchema: {
+        page: z.number().int().min(0).default(0),
+        size: z.number().int().min(1).max(250).default(DEFAULT_PAGE_SIZE),
+      },
+      annotations: RO,
+    },
+    async ({ page, size }) => {
+      const data = await client.get<unknown>("/v1/recurring-templates", { page, size });
+      return { structuredContent: { data }, content: text("Retrieved recurring templates.") };
     },
   );
 }

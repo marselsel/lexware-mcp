@@ -1,7 +1,11 @@
 import type { McpServer } from "skybridge/server";
 import type { Config } from "../config.js";
 import type { LexwareClient } from "../lexware/client.js";
-import { registerArticleReadTools, registerArticleWriteTools } from "./articles.js";
+import {
+  registerArticleDeleteTools,
+  registerArticleReadTools,
+  registerArticleWriteTools,
+} from "./articles.js";
 import { registerContactDraftTools, registerContactReadTools } from "./contacts.js";
 import {
   registerDocumentDraftTools,
@@ -13,8 +17,10 @@ import {
   registerEventSubscriptionReadTools,
   registerEventSubscriptionWriteTools,
 } from "./event-subscriptions.js";
+import { registerFileReadTools, registerFileWriteTools } from "./files.js";
 import { registerProfileTools } from "./profile.js";
 import { registerReferenceReadTools } from "./reference.js";
+import { registerVoucherWriteTools } from "./vouchers.js";
 
 /**
  * Register MCP tools according to the resolved capability tiers. Only enabled
@@ -29,6 +35,7 @@ export function registerTools(server: McpServer, client: LexwareClient, config: 
   registerArticleReadTools(server, client);
   registerDocumentReadTools(server, client, config.lexwareAppBaseUrl);
   registerReferenceReadTools(server, client);
+  registerFileReadTools(server, client);
   registerEventSubscriptionReadTools(server, client);
 
   // Draft / write tier (create drafts + non-binding updates).
@@ -36,12 +43,15 @@ export function registerTools(server: McpServer, client: LexwareClient, config: 
     registerContactDraftTools(server, client);
     registerArticleWriteTools(server, client);
     registerDocumentDraftTools(server, client);
+    registerVoucherWriteTools(server, client);
+    registerFileWriteTools(server, client);
     registerEventSubscriptionWriteTools(server, client);
   }
 
   // Finalize / binding & irreversible tier.
   if (capabilities.finalize) {
     registerDocumentFinalizeTools(server, client);
+    registerArticleDeleteTools(server, client);
     registerEventSubscriptionDeleteTools(server, client);
   }
 }

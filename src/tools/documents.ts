@@ -1,5 +1,5 @@
 import type { ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
-import type { McpServer } from "skybridge/server";
+import { embeddedResource, type McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import { type Paged, VOUCHER_STATUSES, VOUCHER_TYPES, type VoucherlistEntry } from "../lexware/types.js";
@@ -18,16 +18,23 @@ interface DocType {
   schema: ZodRawShapeCompat | null;
   /** Whether `?finalize=true` issuing is supported. */
   finalize: boolean;
+  /**
+   * Whether `GET /v1/{path}/{id}/document` renders a downloadable PDF for this
+   * type. Confirmed in the docs for invoice/quotation/credit-note/delivery-note;
+   * the others are left false until a read-only live check confirms support.
+   */
+  renderable: boolean;
 }
 
 const DOC_TYPES: DocType[] = [
-  { key: "invoice", path: "invoices", label: "invoice", schema: invoiceInputShape, finalize: true },
-  { key: "quotation", path: "quotations", label: "quotation", schema: quotationInputShape, finalize: true },
-  { key: "credit-note", path: "credit-notes", label: "credit note", schema: genericDocumentInputShape, finalize: true },
-  { key: "order-confirmation", path: "order-confirmations", label: "order confirmation", schema: genericDocumentInputShape, finalize: true },
-  { key: "delivery-note", path: "delivery-notes", label: "delivery note", schema: genericDocumentInputShape, finalize: true },
-  { key: "dunning", path: "dunnings", label: "dunning", schema: genericDocumentInputShape, finalize: true },
-  { key: "down-payment-invoice", path: "down-payment-invoices", label: "down payment invoice", schema: null, finalize: false },
+  { key: "invoice", path: "invoices", label: "invoice", schema: invoiceInputShape, finalize: true, renderable: true },
+  { key: "quotation", path: "quotations", label: "quotation", schema: quotationInputShape, finalize: true, renderable: true },
+  { key: "credit-note", path: "credit-notes", label: "credit note", schema: genericDocumentInputShape, finalize: true, renderable: true },
+  { key: "order-confirmation", path: "order-confirmations", label: "order confirmation", schema: genericDocumentInputShape, finalize: true, renderable: false },
+  { key: "delivery-note", path: "delivery-notes", label: "delivery note", schema: genericDocumentInputShape, finalize: true, renderable: true },
+  { key: "dunning", path: "dunnings", label: "dunning", schema: genericDocumentInputShape, finalize: true, renderable: false },
+  // VERIFY (read-only, live): down-payment-invoices are GET-only (no create/finalize); confirm /document before enabling render.
+  { key: "down-payment-invoice", path: "down-payment-invoices", label: "down payment invoice", schema: null, finalize: false, renderable: false },
 ];
 
 /**
@@ -102,6 +109,41 @@ export function registerDocumentReadTools(
     );
   }
 
+  // render-<doctype>-pdf: materialize a document as a PDF and return the bytes.
+  for (const doc of DOC_TYPES) {
+    if (!doc.renderable) continue;
+    server.registerTool(
+      {
+        name: `render-${doc.key}-pdf`,
+        description:
+          `Render a ${doc.label} to PDF and return the file inline. Calls GET /v1/${doc.path}/{id}/document to ` +
+          `materialize the PDF, then downloads it. Note: Lexware generally renders only a finalized document.`,
+        inputSchema: { id: z.string() },
+        annotations: RO,
+      },
+      async ({ id }) => {
+        // Two-step per the Lexware docs: /document returns a file id, then GET /v1/files/{id} is the binary.
+        const { documentFileId } = await client.get<{ documentFileId: string }>(
+          `/v1/${doc.path}/${encodeURIComponent(id)}/document`,
+        );
+        const { data, contentType } = await client.getBinary(
+          `/v1/files/${encodeURIComponent(documentFileId)}`,
+        );
+        return {
+          structuredContent: { documentFileId, mimeType: contentType, byteLength: data.length },
+          content: [
+            ...text(`Rendered ${doc.label} ${id} to PDF (${data.length} bytes).`),
+            embeddedResource({
+              uri: `lexware://files/${documentFileId}`,
+              mimeType: contentType,
+              blob: data.toString("base64"),
+            }),
+          ],
+        };
+      },
+    );
+  }
+
   server.registerTool(
     {
       name: "get-voucher",
@@ -152,6 +194,38 @@ export function registerDocumentDraftTools(server: McpServer, client: LexwareCli
         return {
           structuredContent: { ...created, finalized: false },
           content: text(`Created DRAFT ${doc.label} ${created.id} (not finalized).`),
+        };
+      },
+    );
+  }
+
+  // update-draft-<doctype>: edit an existing draft document (optimistic locking).
+  for (const doc of DOC_TYPES) {
+    if (!doc.schema) continue;
+    server.registerTool(
+      {
+        name: `update-draft-${doc.key}`,
+        description:
+          `Update an existing DRAFT ${doc.label}. Pass the current \`version\` from get-${doc.key} ` +
+          `(optimistic locking) — a stale version is rejected with 409. Only drafts are editable; a finalized ` +
+          `document cannot be changed.`,
+        inputSchema: {
+          id: z.string(),
+          // VERIFY: documents use the same optimistic-locking `version` as contacts/articles.
+          version: z.number().int().describe(`Current version from get-${doc.key}.`),
+          ...doc.schema,
+        },
+        annotations: WRITE,
+      },
+      async ({ id, ...body }) => {
+        const updated = await client.request<{ id: string; version: number }>(
+          "PUT",
+          `/v1/${doc.path}/${encodeURIComponent(id)}`,
+          { body, idempotent: false },
+        );
+        return {
+          structuredContent: { ...updated, finalized: false },
+          content: text(`Updated DRAFT ${doc.label} ${id} (now version ${updated.version}).`),
         };
       },
     );

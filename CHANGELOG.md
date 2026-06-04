@@ -7,9 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Files & PDF (binary) support** — the client now speaks binary, not just JSON:
+  - `download-file` (GET a stored file) and document `render-<type>-pdf`
+    (invoice/quotation/credit-note/delivery-note: render via `/document`, then download)
+    return the bytes inline as MCP embedded resources.
+  - `upload-file` and `upload-voucher-file` send `multipart/form-data` (file as base64 in).
+- **Bookkeeping vouchers** — `create-voucher`, `update-voucher`, and `upload-voucher-file`
+  (attach a receipt) for manually-booked sales/purchase transactions.
+- **Document draft-updates** — `update-draft-<type>` for the six writable document types
+  (optimistic locking via `version`).
+- `list-recurring-templates` (read) and `delete-article` (finalize tier, destructive).
+- Two new `LexwareClient` methods — `getBinary` and `postMultipart` — sharing the existing
+  rate-limit/retry transport; multipart deliberately omits `Content-Type` (fetch derives the boundary).
+
+### Added — initial release
 - Initial open-source release of the Lexware Office MCP server (Skybridge MCP App) —
   a remote/hosted, OAuth-capable connector for the Claude app, claude.ai web, and ChatGPT.
-- **~40 tools** across read / draft / finalize tiers:
+- **Tiered tools** across read / draft / finalize:
   - **Read** (always on): profile; contacts & articles (list/get); voucherlist; full
     documents (invoices, quotations, credit notes, order confirmations, delivery notes,
     dunnings, down-payment invoices, vouchers); payments; reference data (countries,
@@ -30,5 +44,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Docker image, `docker-compose.yml`, Cloud Run guide, CI, and tests.
 
 ### Known limitations
-- `get-document-link` returns a Lexware web-app deeplink; fetching raw PDF bytes
-  is not yet implemented.
+- A few write shapes are typed leniently and carry `VERIFY` notes pending confirmation
+  against live data: bookkeeping-voucher fields, the file-upload `type` field, and whether
+  document draft-updates use optimistic-locking `version`. Wrong guesses surface as a clean
+  4xx (`LexwareApiError`), never silent data loss.
+- `render-<type>-pdf` is wired for invoice/quotation/credit-note/delivery-note; dunning,
+  order-confirmation, and down-payment rendering await a read-only live check of `/document`.

@@ -71,7 +71,6 @@ export class LexwareClient {
   }
 
   async request<T>(method: string, path: string, opts: RequestOptions): Promise<T> {
-    const url = this.buildUrl(path, opts.query);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       Accept: "application/json",
@@ -81,6 +80,78 @@ export class LexwareClient {
       headers["Content-Type"] = "application/json";
       bodyText = JSON.stringify(opts.body);
     }
+    const res = await this.sendWithRetry(method, path, {
+      query: opts.query,
+      headers,
+      body: bodyText,
+      idempotent: opts.idempotent,
+    });
+    return (await this.safeParse(res)) as T;
+  }
+
+  /**
+   * GET a binary resource (a rendered document PDF or an uploaded file). GETs are
+   * idempotent, so this is retried like {@link get} on 429 / transient failures.
+   * Returns the raw bytes plus the response content-type.
+   */
+  async getBinary(
+    path: string,
+    accept = "application/pdf",
+  ): Promise<{ data: Buffer; contentType: string }> {
+    const res = await this.sendWithRetry("GET", path, {
+      headers: { Authorization: `Bearer ${this.apiKey}`, Accept: accept },
+      idempotent: true,
+    });
+    const data = Buffer.from(await res.arrayBuffer());
+    return { data, contentType: res.headers.get("content-type") ?? accept };
+  }
+
+  /**
+   * POST a multipart/form-data upload: a single `file` part plus optional string
+   * fields. Like {@link post} this is NON-idempotent — never replayed on a
+   * transport/5xx failure (a duplicate upload risk); 429 is still retried.
+   *
+   * IMPORTANT: we deliberately do NOT set a Content-Type header — `fetch` derives
+   * the `multipart/form-data; boundary=…` value from the FormData body. Setting it
+   * manually drops the boundary and the upload fails.
+   */
+  async postMultipart<T>(
+    path: string,
+    file: { bytes: Uint8Array; filename: string; contentType: string },
+    fields: Record<string, string> = {},
+  ): Promise<T> {
+    const form = new FormData();
+    // A Uint8Array/Buffer is a valid BlobPart at runtime (Blob copies the view's
+    // bytes, honoring byteOffset/length), but the DOM lib types BlobPart as
+    // ArrayBuffer-backed only; the cast bridges that without an extra copy.
+    const blob = new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: file.contentType });
+    form.set("file", blob, file.filename);
+    for (const [key, value] of Object.entries(fields)) form.set(key, value);
+    const res = await this.sendWithRetry("POST", path, {
+      headers: { Authorization: `Bearer ${this.apiKey}`, Accept: "application/json" },
+      body: form,
+      idempotent: false,
+    });
+    return (await this.safeParse(res)) as T;
+  }
+
+  /**
+   * Shared transport for every verb: rate-limit, fetch with a timeout, retry per
+   * policy, and throw {@link LexwareApiError} on a non-OK status. Returns the
+   * successful `Response` for the caller to parse (JSON or binary). 429 is always
+   * retried; transport/5xx failures are retried only for idempotent calls.
+   */
+  private async sendWithRetry(
+    method: string,
+    path: string,
+    opts: {
+      query?: RequestOptions["query"];
+      headers: Record<string, string>;
+      body?: BodyInit;
+      idempotent: boolean;
+    },
+  ): Promise<Response> {
+    const url = this.buildUrl(path, opts.query);
 
     let attempt = 0;
     // eslint-disable-next-line no-constant-condition
@@ -91,8 +162,8 @@ export class LexwareClient {
       try {
         res = await this.fetchFn(url, {
           method,
-          headers,
-          body: bodyText,
+          headers: opts.headers,
+          body: opts.body,
           signal: AbortSignal.timeout(this.requestTimeoutMs),
         });
       } catch (err) {
@@ -130,7 +201,7 @@ export class LexwareClient {
         throw new LexwareApiError(res.status, describeErrorBody(res.status, res.statusText, body));
       }
 
-      return (await this.safeParse(res)) as T;
+      return res;
     }
   }
 

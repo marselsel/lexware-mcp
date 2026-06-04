@@ -28,6 +28,13 @@ const READ_TOOLS = [
   "get-recurring-template",
   "list-event-subscriptions",
   "get-event-subscription",
+  // expansion: file download, document PDF render, recurring-template list
+  "download-file",
+  "render-invoice-pdf",
+  "render-quotation-pdf",
+  "render-credit-note-pdf",
+  "render-delivery-note-pdf",
+  "list-recurring-templates",
 ];
 const DRAFT_TOOLS = [
   "create-contact",
@@ -41,6 +48,17 @@ const DRAFT_TOOLS = [
   "create-draft-delivery-note",
   "create-draft-dunning",
   "create-event-subscription",
+  // expansion: bookkeeping vouchers + receipts, file upload, document draft-updates
+  "create-voucher",
+  "update-voucher",
+  "upload-voucher-file",
+  "upload-file",
+  "update-draft-invoice",
+  "update-draft-quotation",
+  "update-draft-credit-note",
+  "update-draft-order-confirmation",
+  "update-draft-delivery-note",
+  "update-draft-dunning",
 ];
 const FINALIZE_TOOLS = [
   "create-finalized-invoice",
@@ -50,6 +68,8 @@ const FINALIZE_TOOLS = [
   "create-finalized-delivery-note",
   "create-finalized-dunning",
   "delete-event-subscription",
+  // expansion: destructive article delete (finalize tier)
+  "delete-article",
 ];
 
 /** Capture which tool names get registered for a given config. */

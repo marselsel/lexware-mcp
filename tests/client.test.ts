@@ -9,6 +9,13 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
   });
 }
 
+function binary(bytes: Uint8Array, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(bytes, {
+    status,
+    headers: { "content-type": "application/pdf", ...headers },
+  });
+}
+
 /** Client with rate limiting effectively disabled and deterministic backoff. */
 function makeClient(fetchFn: typeof fetch, slept: number[] = []) {
   return new LexwareClient({
@@ -139,5 +146,93 @@ describe("LexwareClient", () => {
     const client = makeClient(fetchFn);
     const err = await client.get("/v1/profile").catch((e) => e);
     expect(err.kind).toBe("auth");
+  });
+
+  it("getBinary returns the bytes as a Buffer with the response content-type", async () => {
+    const fetchFn = vi.fn(async (_url, init) => {
+      expect((init?.headers as Record<string, string>).Accept).toBe("application/pdf");
+      return binary(new Uint8Array([1, 2, 3, 4]), 200, { "content-type": "application/pdf" });
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const { data, contentType } = await client.getBinary("/v1/files/abc");
+    expect(Buffer.isBuffer(data)).toBe(true);
+    expect([...data]).toEqual([1, 2, 3, 4]);
+    expect(contentType).toBe("application/pdf");
+  });
+
+  it("getBinary retries an idempotent GET on 5xx, then succeeds", async () => {
+    let n = 0;
+    const fetchFn = vi.fn(async () => {
+      n += 1;
+      return n < 2 ? json({ e: 1 }, 503) : binary(new Uint8Array([9]));
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const { data } = await client.getBinary("/v1/files/x");
+    expect([...data]).toEqual([9]);
+    expect(n).toBe(2);
+  });
+
+  it("getBinary maps a 406 to a validation error", async () => {
+    const fetchFn = vi.fn(async () =>
+      json({ message: "not acceptable" }, 406),
+    ) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const err = await client.getBinary("/v1/files/x").catch((e) => e);
+    expect(err).toBeInstanceOf(LexwareApiError);
+    expect(err.status).toBe(406);
+    expect(err.kind).toBe("validation");
+  });
+
+  it("postMultipart sends a FormData body and never sets Content-Type itself", async () => {
+    const fetchFn = vi.fn(async (_url, init) => {
+      const i = init as RequestInit;
+      expect(i.method).toBe("POST");
+      // Must be absent so fetch derives the multipart boundary.
+      expect((i.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+      expect(i.body).toBeInstanceOf(FormData);
+      const form = i.body as FormData;
+      expect(form.get("type")).toBe("voucher");
+      expect(form.get("file")).toBeInstanceOf(Blob);
+      return json({ id: "file-1" });
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const res = await client.postMultipart<{ id: string }>(
+      "/v1/files",
+      { bytes: new Uint8Array([1, 2, 3]), filename: "receipt.pdf", contentType: "application/pdf" },
+      { type: "voucher" },
+    );
+    expect(res.id).toBe("file-1");
+  });
+
+  it("postMultipart does NOT retry on a network error (no duplicate uploads)", async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new Error("ECONNRESET");
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    await expect(
+      client.postMultipart("/v1/files", {
+        bytes: new Uint8Array([1]),
+        filename: "a.pdf",
+        contentType: "application/pdf",
+      }),
+    ).rejects.toMatchObject({ status: 0 });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("postMultipart still retries on 429", async () => {
+    const slept: number[] = [];
+    let n = 0;
+    const fetchFn = vi.fn(async () => {
+      n += 1;
+      return n === 1 ? json({}, 429, { "retry-after": "1" }) : json({ id: "f" });
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn, slept);
+    const res = await client.postMultipart<{ id: string }>("/v1/files", {
+      bytes: new Uint8Array([1]),
+      filename: "a.pdf",
+      contentType: "application/pdf",
+    });
+    expect(res.id).toBe("f");
+    expect(n).toBe(2);
   });
 });

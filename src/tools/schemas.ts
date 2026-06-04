@@ -129,3 +129,41 @@ export const contactInputShape = {
     .describe("For a company; name is required."),
   note: z.string().optional(),
 } as const;
+
+/**
+ * Bookkeeping voucher body (POST/PUT /v1/vouchers). Lenient: the load-bearing
+ * fields are typed and `voucherItems` rows pass through. VERIFY the exact required
+ * set and the `type`/`taxType` enums against the live API before relying on it.
+ */
+export const voucherInputShape = {
+  type: z
+    .string()
+    .describe('Voucher type, e.g. "salesinvoice", "salescreditnote", "purchaseinvoice", "purchasecreditnote".'),
+  voucherStatus: z.string().optional().describe('e.g. "open", "paid".'),
+  voucherNumber: z.string().optional(),
+  voucherDate: z.string().describe("ISO date of the voucher."),
+  shippingDate: z.string().optional().describe("ISO date."),
+  dueDate: z.string().optional().describe("ISO date."),
+  totalGrossAmount: z.number().optional().describe("Total gross amount."),
+  totalTaxAmount: z.number().optional().describe("Total tax amount."),
+  taxType: z.string().optional().describe('e.g. "net", "gross".'),
+  useCollectiveContact: z.boolean().optional(),
+  contactId: z
+    .string()
+    .optional()
+    .describe("Reference an existing contact; required unless useCollectiveContact is true."),
+  remark: z.string().optional(),
+  voucherItems: z
+    .array(
+      z
+        .object({
+          amount: z.number().describe("Gross amount of the line."),
+          taxAmount: z.number().describe("Tax amount of the line."),
+          taxRatePercent: z.number().describe("Tax rate, e.g. 19, 7, 0."),
+          categoryId: z.string().describe("Posting category id (see get-posting-categories)."),
+        })
+        .passthrough(),
+    )
+    .optional()
+    .describe("Booking lines."),
+} as const;
