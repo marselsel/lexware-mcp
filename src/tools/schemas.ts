@@ -132,38 +132,65 @@ export const contactInputShape = {
 
 /**
  * Bookkeeping voucher body (POST/PUT /v1/vouchers). Lenient: the load-bearing
- * fields are typed and `voucherItems` rows pass through. VERIFY the exact required
- * set and the `type`/`taxType` enums against the live API before relying on it.
+ * fields are typed and `voucherItems` rows pass through. Formats below were
+ * confirmed against a live voucher (full-ISO dates with offset, voucherStatus
+ * "unchecked"). The exact create required-set and the valid `taxRatePercent`
+ * values are reported by Lexware's IssueList on a 406 — now surfaced verbatim in
+ * the tool error (field path + reason), so iterate from that.
  */
 export const voucherInputShape = {
   type: z
     .string()
-    .describe('Voucher type, e.g. "salesinvoice", "salescreditnote", "purchaseinvoice", "purchasecreditnote".'),
-  voucherStatus: z.string().optional().describe('e.g. "open", "paid".'),
-  voucherNumber: z.string().optional(),
-  voucherDate: z.string().describe("ISO date of the voucher."),
-  shippingDate: z.string().optional().describe("ISO date."),
-  dueDate: z.string().optional().describe("ISO date."),
-  totalGrossAmount: z.number().optional().describe("Total gross amount."),
-  totalTaxAmount: z.number().optional().describe("Total tax amount."),
-  taxType: z.string().optional().describe('e.g. "net", "gross".'),
-  useCollectiveContact: z.boolean().optional(),
+    .describe('Required. "salesinvoice", "salescreditnote", "purchaseinvoice", or "purchasecreditnote".'),
+  voucherStatus: z
+    .string()
+    .optional()
+    .describe('e.g. "unchecked" (uncategorized inbox voucher), "open", "paid", or "voided".'),
+  voucherNumber: z
+    .string()
+    .optional()
+    .describe("Supplier/document number (commonly required for purchase vouchers)."),
+  voucherDate: z
+    .string()
+    .describe('Required. Full ISO date-time with offset, e.g. "2026-06-12T00:00:00.000+02:00".'),
+  shippingDate: z.string().optional().describe("Full ISO date-time with offset."),
+  dueDate: z.string().optional().describe("Full ISO date-time with offset."),
+  totalGrossAmount: z
+    .number()
+    .optional()
+    .describe("Total gross amount. Must equal the sum of voucherItems[].amount when taxType is gross."),
+  totalTaxAmount: z
+    .number()
+    .optional()
+    .describe("Total tax amount. Must equal the sum of voucherItems[].taxAmount."),
+  taxType: z
+    .string()
+    .optional()
+    .describe('"gross" or "net" — whether each voucherItems[].amount is gross or net.'),
+  useCollectiveContact: z
+    .boolean()
+    .optional()
+    .describe("If true, no contactId is required (books to a collective contact)."),
   contactId: z
     .string()
     .optional()
-    .describe("Reference an existing contact; required unless useCollectiveContact is true."),
+    .describe("Existing contact id; required unless useCollectiveContact is true."),
   remark: z.string().optional(),
   voucherItems: z
     .array(
       z
         .object({
-          amount: z.number().describe("Gross amount of the line."),
+          amount: z.number().describe("Line amount (gross or net per taxType)."),
           taxAmount: z.number().describe("Tax amount of the line."),
-          taxRatePercent: z.number().describe("Tax rate, e.g. 19, 7, 0."),
-          categoryId: z.string().describe("Posting category id (see get-posting-categories)."),
+          taxRatePercent: z
+            .number()
+            .describe("VAT rate: 0, 7, or 19 (also 5, 16 historically). A frequent 406 cause — must be a valid rate."),
+          categoryId: z
+            .string()
+            .describe("Posting category id from get-posting-categories (required for each line)."),
         })
         .passthrough(),
     )
     .optional()
-    .describe("Booking lines."),
+    .describe("Booking lines. May be empty for an unchecked voucher; required to fully book one."),
 } as const;
