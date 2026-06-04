@@ -109,24 +109,84 @@ export const articleInputShape = {
     .passthrough(),
 } as const;
 
-/** Minimal contact creation: roles + person or company. version must be 0 for create. */
+// Shared contact sub-schemas (used by both create and update). All lenient.
+const contactRolesSchema = z
+  .object({
+    customer: z.object({}).passthrough().optional(),
+    vendor: z.object({}).passthrough().optional(),
+  })
+  .passthrough();
+
+const contactPersonBase = { salutation: z.string().optional(), firstName: z.string().optional() };
+
+const contactCompanyFields = {
+  vatRegistrationId: z.string().optional().describe('VAT registration ID, e.g. "IE3336483DH".'),
+  taxNumber: z.string().optional(),
+  allowTaxFreeInvoices: z.boolean().optional(),
+};
+
+const contactAddressEntrySchema = z
+  .object({
+    supplement: z.string().optional(),
+    street: z.string().optional(),
+    zip: z.string().optional(),
+    city: z.string().optional(),
+    countryCode: z.string().optional().describe('ISO country code, e.g. "DE", "IE".'),
+  })
+  .passthrough();
+
+const contactAddressesSchema = z
+  .object({
+    billing: z.array(contactAddressEntrySchema).optional(),
+    shipping: z.array(contactAddressEntrySchema).optional(),
+  })
+  .passthrough()
+  .describe("Billing/shipping addresses. Include the FULL address (street/zip/city/countryCode).");
+
+const contactEmailAddressesSchema = z
+  .object({
+    business: z.array(z.string()).optional(),
+    office: z.array(z.string()).optional(),
+    private: z.array(z.string()).optional(),
+    other: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+/** Contact creation: roles + person or company. version must be 0 for create. */
 export const contactInputShape = {
-  roles: z
-    .object({
-      customer: z.object({}).passthrough().optional(),
-      vendor: z.object({}).passthrough().optional(),
-    })
-    .describe('At least one role, e.g. { "customer": {} }.'),
+  roles: contactRolesSchema.describe('At least one role, e.g. { "customer": {} }.'),
   person: z
-    .object({ salutation: z.string().optional(), firstName: z.string().optional(), lastName: z.string() })
+    .object({ ...contactPersonBase, lastName: z.string() })
     .passthrough()
     .optional()
     .describe("For a private person; lastName is required."),
   company: z
-    .object({ name: z.string() })
+    .object({ name: z.string(), ...contactCompanyFields })
     .passthrough()
     .optional()
-    .describe("For a company; name is required."),
+    .describe("For a company; name is required. May include vatRegistrationId."),
+  addresses: contactAddressesSchema.optional(),
+  emailAddresses: contactEmailAddressesSchema.optional(),
+  note: z.string().optional(),
+} as const;
+
+/**
+ * Contact fields for update-contact (read-modify-write): every field is optional.
+ * Unspecified fields (existing addresses, emailAddresses, roles, …) are carried over
+ * from the current contact, and nested objects like `company` are merged — so you can
+ * set just `company.vatRegistrationId` or a billing `countryCode` without resending
+ * everything else.
+ */
+export const contactUpdateShape = {
+  roles: contactRolesSchema.optional(),
+  person: z.object({ ...contactPersonBase, lastName: z.string().optional() }).passthrough().optional(),
+  company: z
+    .object({ name: z.string().optional(), ...contactCompanyFields })
+    .passthrough()
+    .optional()
+    .describe("Company fields to set (e.g. vatRegistrationId); merged into the existing company."),
+  addresses: contactAddressesSchema.optional(),
+  emailAddresses: contactEmailAddressesSchema.optional(),
   note: z.string().optional(),
 } as const;
 
@@ -193,4 +253,23 @@ export const voucherInputShape = {
     )
     .optional()
     .describe("Booking lines. May be empty for an unchecked voucher; required to fully book one."),
+} as const;
+
+/**
+ * Voucher fields for update-voucher (read-modify-write): every field is optional.
+ * Unspecified fields are carried over from the existing voucher, so a minimal edit
+ * like `{ id, voucherItems: [...] }` is safe (attached files, voucherNumber and
+ * voucherStatus are preserved). If you send `voucherItems` it replaces the whole
+ * list — include every line.
+ */
+export const voucherUpdateShape = {
+  ...voucherInputShape,
+  type: z
+    .string()
+    .optional()
+    .describe('"salesinvoice", "salescreditnote", "purchaseinvoice", or "purchasecreditnote".'),
+  voucherDate: z
+    .string()
+    .optional()
+    .describe('Full ISO date-time with offset, e.g. "2026-06-12T00:00:00.000+02:00".'),
 } as const;
