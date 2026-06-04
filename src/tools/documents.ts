@@ -148,7 +148,7 @@ export function registerDocumentReadTools(
     {
       name: "get-voucher",
       description:
-        "Get a single bookkeeping voucher by id. Note: voucherlist rows of type 'invoice' resolve via get-invoice, 'quotation' via get-quotation, etc. — only manually-booked vouchers resolve here.",
+        "Get a single bookkeeping voucher by id — the full object, including contactId for referenced contacts (collective vouchers have only contactName) and files[] (ids of attached receipts). Note: voucherlist rows of type 'invoice' resolve via get-invoice, 'quotation' via get-quotation, etc. — only manually-booked vouchers resolve here.",
       inputSchema: { id: z.string() },
       annotations: RO,
     },

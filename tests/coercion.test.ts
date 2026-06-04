@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { contactInputShape, contactUpdateShape, voucherInputShape } from "../src/tools/schemas.js";
+import {
+  articleUpdateShape,
+  contactInputShape,
+  contactUpdateShape,
+  invoiceInputShape,
+  voucherInputShape,
+} from "../src/tools/schemas.js";
 
 // Mirrors how the MCP SDK validates tool input: z.object(rawShape).parse(args).
 const parse = (shape: Record<string, z.ZodTypeAny>, args: unknown) =>
@@ -51,5 +57,27 @@ describe("JSON-string coercion (jsonObj) for object/array params", () => {
 
   it("leaves an invalid JSON string to fail validation (not a crash)", () => {
     expect(() => parse({ id: z.string(), ...contactUpdateShape }, { id: "c1", addresses: "{not json" })).toThrow();
+  });
+
+  it("document tools accept address/lineItems/totalPrice/taxConditions as JSON strings", () => {
+    const parsed = parse(invoiceInputShape, {
+      voucherDate: "2026-06-01T00:00:00.000+02:00",
+      address: JSON.stringify({ contactId: "c1" }),
+      lineItems: JSON.stringify([{ type: "custom", name: "Item" }]),
+      totalPrice: JSON.stringify({ currency: "EUR" }),
+      taxConditions: JSON.stringify({ taxType: "net" }),
+      shippingConditions: JSON.stringify({ shippingType: "none" }),
+    }) as Record<string, unknown>;
+    expect(parsed.address).toEqual({ contactId: "c1" });
+    expect(parsed.lineItems).toEqual([{ type: "custom", name: "Item" }]);
+    expect((parsed.totalPrice as { currency: string }).currency).toBe("EUR");
+  });
+
+  it("update-article accepts price as a JSON string", () => {
+    const parsed = parse(
+      { id: z.string(), ...articleUpdateShape },
+      { id: "a1", price: JSON.stringify({ netPrice: 12 }) },
+    ) as Record<string, unknown>;
+    expect(parsed.price).toEqual({ netPrice: 12 });
   });
 });

@@ -189,3 +189,43 @@ describe("update-draft-<type> (read-modify-write)", () => {
     expect(body.version).toBe(1);
   });
 });
+
+describe("update-voucher contact + status handling", () => {
+  it("A1: setting contactId drops a custom contactName and forces useCollectiveContact:false", async () => {
+    const current = {
+      id: "v1",
+      contactName: "Sammellieferant",
+      useCollectiveContact: true,
+      voucherStatus: "open",
+      files: ["f1"],
+      version: 1,
+    };
+    const request = vi.fn(async () => ({ id: "v1", version: 2 }));
+    const client = { get: vi.fn(async () => current), request } as unknown as LexwareClient;
+    await handlersFor(registerVoucherWriteTools, client)["update-voucher"]({ id: "v1", contactId: "contact-9" });
+    const body = putBody(request);
+    expect(body.contactId).toBe("contact-9");
+    expect(body.contactName).toBeUndefined();
+    expect(body.useCollectiveContact).toBe(false);
+    expect(body.files).toEqual(["f1"]); // RMW still preserves the receipt
+  });
+
+  it("B1: a payment-derived voucherStatus (paid) is omitted from the PUT", async () => {
+    const current = { id: "v2", voucherStatus: "paid", files: [], version: 3 };
+    const request = vi.fn(async () => ({ id: "v2", version: 4 }));
+    const client = { get: vi.fn(async () => current), request } as unknown as LexwareClient;
+    await handlersFor(registerVoucherWriteTools, client)["update-voucher"]({ id: "v2", remark: "note" });
+    const body = putBody(request);
+    expect(body.voucherStatus).toBeUndefined();
+    expect(body.remark).toBe("note");
+  });
+
+  it("B5: an explicit voucherStatus (voided) is kept for a void attempt", async () => {
+    const current = { id: "v3", voucherStatus: "open", files: [], version: 1 };
+    const request = vi.fn(async () => ({ id: "v3", version: 2 }));
+    const client = { get: vi.fn(async () => current), request } as unknown as LexwareClient;
+    await handlersFor(registerVoucherWriteTools, client)["update-voucher"]({ id: "v3", voucherStatus: "voided" });
+    const body = putBody(request);
+    expect(body.voucherStatus).toBe("voided");
+  });
+});

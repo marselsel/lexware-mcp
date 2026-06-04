@@ -4,6 +4,9 @@ import type { LexwareClient } from "../lexware/client.js";
 import { voucherInputShape, voucherUpdateShape } from "./schemas.js";
 import { WRITE, deepMergePatch, text } from "./shared.js";
 
+/** Voucher statuses lexoffice DERIVES from payments — re-sending them on PUT is rejected (invalid_value). */
+const DERIVED_VOUCHER_STATUSES = new Set(["paid", "paidoff", "voided", "transferred", "sepadebit"]);
+
 /**
  * Write tools for bookkeeping vouchers (manually-booked sales/purchase
  * transactions). Reads live in documents.ts (get-voucher, get-voucherlist).
@@ -20,8 +23,14 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
       annotations: WRITE,
     },
     async (input) => {
-      // `version` must be 0 when creating (optimistic locking), mirroring contacts. VERIFY for vouchers.
-      const created = await client.post<{ id: string }>("/v1/vouchers", { version: 0, ...input });
+      // `version` must be 0 when creating (optimistic locking), mirroring contacts.
+      const body: Record<string, unknown> = { version: 0, ...input };
+      // A referenced contactId can't coexist with a custom contactName (lexoffice 406).
+      if (input.contactId) {
+        delete body.contactName;
+        body.useCollectiveContact = false;
+      }
+      const created = await client.post<{ id: string }>("/v1/vouchers", body);
       return { structuredContent: created, content: text(`Created voucher ${created.id}.`) };
     },
   );
@@ -31,10 +40,15 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
       name: "update-voucher",
       description:
         "Update a bookkeeping voucher. Read-modify-write: the current voucher is fetched and your fields are " +
-        "merged over it, so attached files and untouched fields (voucherNumber, voucherStatus, contact, …) are " +
-        "preserved — lexoffice PUT otherwise replaces the whole voucher. Send only what you want to change, " +
-        "e.g. { id, voucherItems: [...] }. If you send voucherItems it REPLACES the whole list, so include every " +
-        "line. Pass `version` for optimistic locking (a stale version → 409); omit it to apply to the latest.",
+        "merged over it, so attached files and untouched fields (voucherNumber, contact, …) are preserved. Send " +
+        "only what you change, e.g. { id, voucherItems: [...] }. voucherItems and files REPLACE the whole list. " +
+        "To link a real contact pass contactId (its custom contactName is auto-cleared and useCollectiveContact " +
+        'set false); for a one-off pass contactName. voucherStatus paid/voided/transferred/sepadebit are ' +
+        "payment-derived: an unset status is omitted so a paid-but-not-filed voucher stays editable; pass " +
+        'voucherStatus:"voided" to attempt voiding a duplicate (may be web-app-only — the error will say). NOTE: ' +
+        "vouchers in an already-filed VAT period are festgeschrieben and cannot be modified or deleted via API " +
+        "(web-app Storno only); there is no DELETE endpoint for vouchers. Pass `version` for optimistic locking " +
+        "(omit for latest).",
       inputSchema: {
         id: z.string(),
         version: z
@@ -54,6 +68,17 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
         ...fields,
         version: version ?? (current.version as number),
       });
+      // A1: a referenced contactId can't coexist with a custom contactName (lexoffice:
+      // custom_contact_name_for_referenced_contact_not_allowed). Drop the name + collective flag.
+      if (fields.contactId) {
+        delete body.contactName;
+        body.useCollectiveContact = false;
+      }
+      // B1: omit a payment-derived voucherStatus unless the caller set one explicitly, so a
+      // paid-but-not-filed voucher stays editable (and an explicit "voided" is still attempted).
+      if (fields.voucherStatus === undefined && DERIVED_VOUCHER_STATUSES.has(String(body.voucherStatus))) {
+        delete body.voucherStatus;
+      }
       const updated = await client.request<{ id: string; version: number }>(
         "PUT",
         `/v1/vouchers/${encodeURIComponent(id)}`,
@@ -70,8 +95,9 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
     {
       name: "upload-voucher-file",
       description:
-        "Attach a file (receipt/scan) to a bookkeeping voucher via POST /v1/vouchers/{id}/files. Provide " +
-        "the file as base64. Keep files small (a few MB): the base64 travels inline in the request.",
+        "Attach a file (receipt/scan) to a bookkeeping voucher via POST /v1/vouchers/{id}/files. Provide the " +
+        "file as base64 (inline; keep it under a few MB). To RE-LINK an already-uploaded file by id without " +
+        "re-sending bytes, set the voucher's `files` array via update-voucher instead.",
       inputSchema: {
         id: z.string().describe("The voucher id to attach the file to."),
         fileBase64: z.string().describe("File contents, base64-encoded."),

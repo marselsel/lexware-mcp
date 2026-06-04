@@ -75,13 +75,15 @@ export const shippingConditionsSchema = z
 /** Fields common to every voucher document; specific shapes spread this. */
 const baseDocumentShape = {
   voucherDate: z.string().describe("ISO date/dateTime of the document."),
-  address: addressSchema,
-  lineItems: z.array(lineItemSchema).min(1).max(300),
-  totalPrice: z
-    .object({ currency: z.string().default("EUR") })
-    .passthrough()
-    .describe("Must include the currency (EUR)."),
-  taxConditions: taxConditionsSchema,
+  address: jsonObj(addressSchema),
+  lineItems: jsonObj(z.array(lineItemSchema).min(1).max(300)),
+  totalPrice: jsonObj(
+    z
+      .object({ currency: z.string().default("EUR") })
+      .passthrough()
+      .describe("Must include the currency (EUR)."),
+  ),
+  taxConditions: jsonObj(taxConditionsSchema),
   title: z.string().optional(),
   introduction: z.string().optional(),
   remark: z.string().optional(),
@@ -90,7 +92,7 @@ const baseDocumentShape = {
 /** Invoice (draft or finalized): base fields + required shippingConditions. */
 export const invoiceInputShape = {
   ...baseDocumentShape,
-  shippingConditions: shippingConditionsSchema,
+  shippingConditions: jsonObj(shippingConditionsSchema),
 } as const;
 
 /** Quotation: base fields + expirationDate (no shippingConditions). */
@@ -106,7 +108,7 @@ export const quotationInputShape = {
  */
 export const genericDocumentInputShape = {
   ...baseDocumentShape,
-  shippingConditions: shippingConditionsSchema.optional(),
+  shippingConditions: jsonObj(shippingConditionsSchema).optional(),
 } as const;
 
 /** Create an article: full body. */
@@ -117,14 +119,16 @@ export const articleInputShape = {
   articleNumber: z.string().optional(),
   gtin: z.string().optional(),
   description: z.string().optional(),
-  price: z
-    .object({
-      leadingPrice: z.enum(["NET", "GROSS"]),
-      taxRate: z.number(),
-      netPrice: z.number().optional(),
-      grossPrice: z.number().optional(),
-    })
-    .passthrough(),
+  price: jsonObj(
+    z
+      .object({
+        leadingPrice: z.enum(["NET", "GROSS"]),
+        taxRate: z.number(),
+        netPrice: z.number().optional(),
+        grossPrice: z.number().optional(),
+      })
+      .passthrough(),
+  ),
 } as const;
 
 /**
@@ -140,15 +144,16 @@ export const articleUpdateShape = {
   articleNumber: z.string().optional(),
   gtin: z.string().optional(),
   description: z.string().optional(),
-  price: z
-    .object({
-      leadingPrice: z.enum(["NET", "GROSS"]).optional(),
-      taxRate: z.number().optional(),
-      netPrice: z.number().optional(),
-      grossPrice: z.number().optional(),
-    })
-    .passthrough()
-    .optional(),
+  price: jsonObj(
+    z
+      .object({
+        leadingPrice: z.enum(["NET", "GROSS"]).optional(),
+        taxRate: z.number().optional(),
+        netPrice: z.number().optional(),
+        grossPrice: z.number().optional(),
+      })
+      .passthrough(),
+  ).optional(),
 } as const;
 
 // Shared contact sub-schemas (used by both create and update). All lenient.
@@ -238,6 +243,10 @@ export const contactUpdateShape = {
   ).optional(),
   addresses: jsonObj(contactAddressesSchema).optional(),
   emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("Set true to archive the contact (e.g. hide a duplicate; lexoffice has no contact-merge API)."),
   note: z.string().optional(),
 } as const;
 
@@ -286,6 +295,10 @@ export const voucherInputShape = {
     .string()
     .optional()
     .describe("Existing contact id; required unless useCollectiveContact is true."),
+  contactName: z
+    .string()
+    .optional()
+    .describe('Custom one-off contact name (e.g. "Sammellieferant"). Auto-cleared when you set contactId.'),
   remark: z.string().optional(),
   voucherItems: jsonObj(
     z
@@ -305,6 +318,9 @@ export const voucherInputShape = {
       )
       .describe("Booking lines. May be empty for an unchecked voucher; required to fully book one."),
   ).optional(),
+  files: jsonObj(z.array(z.string()))
+    .optional()
+    .describe("Attached file ids (receipts). Set to re-link existing file(s) by id; replaces the whole list."),
 } as const;
 
 /**
