@@ -9,6 +9,24 @@ import { z } from "zod";
  * requests aren't blocked by an incomplete model.
  */
 
+/**
+ * Wrap an object/array schema so the tool ALSO accepts the value as a JSON string.
+ * Some MCP clients serialise nested object/array arguments as a string, which would
+ * otherwise fail Zod with "expected object, received string". `z.preprocess` keeps the
+ * published JSON Schema's input type intact (verified), so this is purely additive.
+ */
+export const jsonObj = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((value) => {
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value; // leave as-is so Zod reports a precise error
+      }
+    }
+    return value;
+  }, schema);
+
 export const moneySchema = z
   .object({
     currency: z.string().default("EUR").describe("ISO currency; Lexware supports EUR."),
@@ -182,19 +200,21 @@ const contactEmailAddressesSchema = z
 
 /** Contact creation: roles + person or company. version must be 0 for create. */
 export const contactInputShape = {
-  roles: contactRolesSchema.describe('At least one role, e.g. { "customer": {} }.'),
-  person: z
-    .object({ ...contactPersonBase, lastName: z.string() })
-    .passthrough()
-    .optional()
-    .describe("For a private person; lastName is required."),
-  company: z
-    .object({ name: z.string(), ...contactCompanyFields })
-    .passthrough()
-    .optional()
-    .describe("For a company; name is required. May include vatRegistrationId."),
-  addresses: contactAddressesSchema.optional(),
-  emailAddresses: contactEmailAddressesSchema.optional(),
+  roles: jsonObj(contactRolesSchema.describe('At least one role, e.g. { "customer": {} }.')),
+  person: jsonObj(
+    z
+      .object({ ...contactPersonBase, lastName: z.string() })
+      .passthrough()
+      .describe("For a private person; lastName is required."),
+  ).optional(),
+  company: jsonObj(
+    z
+      .object({ name: z.string(), ...contactCompanyFields })
+      .passthrough()
+      .describe("For a company; name is required. May include vatRegistrationId."),
+  ).optional(),
+  addresses: jsonObj(contactAddressesSchema).optional(),
+  emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
   note: z.string().optional(),
 } as const;
 
@@ -206,15 +226,18 @@ export const contactInputShape = {
  * everything else.
  */
 export const contactUpdateShape = {
-  roles: contactRolesSchema.optional(),
-  person: z.object({ ...contactPersonBase, lastName: z.string().optional() }).passthrough().optional(),
-  company: z
-    .object({ name: z.string().optional(), ...contactCompanyFields })
-    .passthrough()
-    .optional()
-    .describe("Company fields to set (e.g. vatRegistrationId); merged into the existing company."),
-  addresses: contactAddressesSchema.optional(),
-  emailAddresses: contactEmailAddressesSchema.optional(),
+  roles: jsonObj(contactRolesSchema).optional(),
+  person: jsonObj(
+    z.object({ ...contactPersonBase, lastName: z.string().optional() }).passthrough(),
+  ).optional(),
+  company: jsonObj(
+    z
+      .object({ name: z.string().optional(), ...contactCompanyFields })
+      .passthrough()
+      .describe("Company fields to set (e.g. vatRegistrationId); merged into the existing company."),
+  ).optional(),
+  addresses: jsonObj(contactAddressesSchema).optional(),
+  emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
   note: z.string().optional(),
 } as const;
 
@@ -264,23 +287,24 @@ export const voucherInputShape = {
     .optional()
     .describe("Existing contact id; required unless useCollectiveContact is true."),
   remark: z.string().optional(),
-  voucherItems: z
-    .array(
-      z
-        .object({
-          amount: z.number().describe("Line amount (gross or net per taxType)."),
-          taxAmount: z.number().describe("Tax amount of the line."),
-          taxRatePercent: z
-            .number()
-            .describe("VAT rate: 0, 7, or 19 (also 5, 16 historically). A frequent 406 cause — must be a valid rate."),
-          categoryId: z
-            .string()
-            .describe("Posting category id from get-posting-categories (required for each line)."),
-        })
-        .passthrough(),
-    )
-    .optional()
-    .describe("Booking lines. May be empty for an unchecked voucher; required to fully book one."),
+  voucherItems: jsonObj(
+    z
+      .array(
+        z
+          .object({
+            amount: z.number().describe("Line amount (gross or net per taxType)."),
+            taxAmount: z.number().describe("Tax amount of the line."),
+            taxRatePercent: z
+              .number()
+              .describe("VAT rate: 0, 7, or 19 (also 5, 16 historically). A frequent 406 cause — must be a valid rate."),
+            categoryId: z
+              .string()
+              .describe("Posting category id from get-posting-categories (required for each line)."),
+          })
+          .passthrough(),
+      )
+      .describe("Booking lines. May be empty for an unchecked voucher; required to fully book one."),
+  ).optional(),
 } as const;
 
 /**
