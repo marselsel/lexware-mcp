@@ -91,7 +91,7 @@ export const genericDocumentInputShape = {
   shippingConditions: shippingConditionsSchema.optional(),
 } as const;
 
-/** Update an article: full body plus the current optimistic-locking version. */
+/** Create an article: full body. */
 export const articleInputShape = {
   title: z.string(),
   type: z.enum(["PRODUCT", "SERVICE"]),
@@ -107,6 +107,30 @@ export const articleInputShape = {
       grossPrice: z.number().optional(),
     })
     .passthrough(),
+} as const;
+
+/**
+ * Article fields for update-article (read-modify-write): every field is optional, so
+ * a minimal edit (e.g. just `price`) is safe — unspecified fields carry over from the
+ * existing article and the `price` object is merged (set just netPrice without
+ * resending leadingPrice/taxRate).
+ */
+export const articleUpdateShape = {
+  title: z.string().optional(),
+  type: z.enum(["PRODUCT", "SERVICE"]).optional(),
+  unitName: z.string().optional().describe('e.g. "piece", "hour".'),
+  articleNumber: z.string().optional(),
+  gtin: z.string().optional(),
+  description: z.string().optional(),
+  price: z
+    .object({
+      leadingPrice: z.enum(["NET", "GROSS"]).optional(),
+      taxRate: z.number().optional(),
+      netPrice: z.number().optional(),
+      grossPrice: z.number().optional(),
+    })
+    .passthrough()
+    .optional(),
 } as const;
 
 // Shared contact sub-schemas (used by both create and update). All lenient.

@@ -1,7 +1,9 @@
 import type { McpServer } from "skybridge/server";
 import { describe, expect, it, vi } from "vitest";
 import type { LexwareClient } from "../src/lexware/client.js";
+import { registerArticleWriteTools } from "../src/tools/articles.js";
 import { registerContactDraftTools } from "../src/tools/contacts.js";
+import { registerDocumentDraftTools } from "../src/tools/documents.js";
 import { registerVoucherWriteTools } from "../src/tools/vouchers.js";
 
 type Handler = (input: Record<string, unknown>) => Promise<unknown>;
@@ -115,5 +117,75 @@ describe("update-contact (read-modify-write)", () => {
       countryCode: "IE",
     });
     expect(body.version).toBe(4);
+  });
+});
+
+describe("update-article (read-modify-write)", () => {
+  it("GETs first, then PUTs the merged article, preserving fields and merging price", async () => {
+    const current = {
+      id: "a1",
+      organizationId: "org",
+      version: 3,
+      title: "Widget",
+      type: "PRODUCT",
+      unitName: "piece",
+      articleNumber: "W-1",
+      gtin: "1234567890123",
+      description: "A widget",
+      price: { leadingPrice: "NET", taxRate: 19, netPrice: 10, grossPrice: 11.9 },
+    };
+    const request = vi.fn(async () => ({ id: "a1", version: 4 }));
+    const get = vi.fn(async () => current);
+    const client = { get, request } as unknown as LexwareClient;
+
+    await handlersFor(registerArticleWriteTools, client)["update-article"]({
+      id: "a1",
+      version: 3,
+      price: { netPrice: 12 }, // change only one price component
+    });
+
+    expect(get).toHaveBeenCalledWith("/v1/articles/a1");
+    const body = putBody(request);
+    expect(body.title).toBe("Widget"); // preserved
+    expect(body.articleNumber).toBe("W-1"); // preserved
+    expect(body.price).toEqual({ leadingPrice: "NET", taxRate: 19, netPrice: 12, grossPrice: 11.9 }); // merged
+    expect(body.version).toBe(3);
+  });
+});
+
+describe("update-draft-<type> (read-modify-write)", () => {
+  it("GETs first, then PUTs the merged invoice, preserving lineItems/address when only title changes", async () => {
+    const current = {
+      id: "i1",
+      organizationId: "org",
+      version: 1,
+      voucherDate: "2026-06-01T00:00:00.000+02:00",
+      address: { contactId: "c1", name: "Acme" },
+      lineItems: [
+        { type: "custom", name: "Item", quantity: 1, unitPrice: { currency: "EUR", netAmount: 100 } },
+      ],
+      totalPrice: { currency: "EUR", totalNetAmount: 100 },
+      taxConditions: { taxType: "net" },
+      title: "Invoice",
+      introduction: "Intro",
+    };
+    const request = vi.fn(async () => ({ id: "i1", version: 2 }));
+    const get = vi.fn(async () => current);
+    const client = { get, request } as unknown as LexwareClient;
+
+    await handlersFor(registerDocumentDraftTools, client)["update-draft-invoice"]({
+      id: "i1",
+      version: 1,
+      title: "Invoice (rev 2)",
+    });
+
+    expect(get).toHaveBeenCalledWith("/v1/invoices/i1");
+    const body = putBody(request);
+    expect(body.lineItems).toEqual(current.lineItems); // preserved
+    expect(body.address).toEqual({ contactId: "c1", name: "Acme" }); // preserved
+    expect(body.taxConditions).toEqual({ taxType: "net" }); // preserved
+    expect(body.introduction).toBe("Intro"); // preserved
+    expect(body.title).toBe("Invoice (rev 2)"); // updated
+    expect(body.version).toBe(1);
   });
 });

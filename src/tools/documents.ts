@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import { type Paged, VOUCHER_STATUSES, VOUCHER_TYPES, type VoucherlistEntry } from "../lexware/types.js";
 import { genericDocumentInputShape, invoiceInputShape, quotationInputShape } from "./schemas.js";
-import { DEFAULT_PAGE_SIZE, LOCAL_RO, RO, WRITE, pagedResult, text } from "./shared.js";
+import { DEFAULT_PAGE_SIZE, LOCAL_RO, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
 
 /** A Lexware voucher-document type and how to create it. */
 interface DocType {
@@ -178,6 +178,19 @@ export function registerDocumentReadTools(
   );
 }
 
+/**
+ * Make every field of a create shape optional, for the read-modify-write update
+ * tools. The raw-shape values are real zod schemas at runtime, so `.optional()`
+ * works; the cast bridges the SDK's compat type.
+ */
+function optionalShape(shape: ZodRawShapeCompat): ZodRawShapeCompat {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(shape)) {
+    out[key] = (value as z.ZodTypeAny).optional();
+  }
+  return out as ZodRawShapeCompat;
+}
+
 /** Draft-creation tools for every writable document type. Registered with the drafts tier. */
 export function registerDocumentDraftTools(server: McpServer, client: LexwareClient): void {
   for (const doc of DOC_TYPES) {
@@ -199,25 +212,38 @@ export function registerDocumentDraftTools(server: McpServer, client: LexwareCli
     );
   }
 
-  // update-draft-<doctype>: edit an existing draft document (optimistic locking).
+  // update-draft-<doctype>: edit an existing draft document (read-modify-write).
   for (const doc of DOC_TYPES) {
     if (!doc.schema) continue;
+    const updateShape = optionalShape(doc.schema);
     server.registerTool(
       {
         name: `update-draft-${doc.key}`,
         description:
-          `Update an existing DRAFT ${doc.label}. Pass the current \`version\` from get-${doc.key} ` +
-          `(optimistic locking) — a stale version is rejected with 409. Only drafts are editable; a finalized ` +
-          `document cannot be changed.`,
+          `Update an existing DRAFT ${doc.label} (read-modify-write: the current document is fetched and your ` +
+          `fields are merged over it, so untouched fields like title/introduction aren't wiped). Send only what ` +
+          `you change. If you send lineItems it REPLACES the whole list — include every line. Pass \`version\` for ` +
+          `optimistic locking (omit to use the latest). Only drafts are editable; a finalized document cannot be changed.`,
         inputSchema: {
           id: z.string(),
-          // VERIFY: documents use the same optimistic-locking `version` as contacts/articles.
-          version: z.number().int().describe(`Current version from get-${doc.key}.`),
-          ...doc.schema,
+          version: z
+            .number()
+            .int()
+            .optional()
+            .describe(`Current version from get-${doc.key} (optimistic lock). Omit to use the latest.`),
+          ...updateShape,
         },
         annotations: WRITE,
       },
-      async ({ id, ...body }) => {
+      async ({ id, version, ...fields }) => {
+        // Read-modify-write: load the current draft and merge the caller's fields over it.
+        const current = await client.get<Record<string, unknown>>(
+          `/v1/${doc.path}/${encodeURIComponent(id)}`,
+        );
+        const body = deepMergePatch(current, {
+          ...fields,
+          version: version ?? (current.version as number),
+        });
         const updated = await client.request<{ id: string; version: number }>(
           "PUT",
           `/v1/${doc.path}/${encodeURIComponent(id)}`,

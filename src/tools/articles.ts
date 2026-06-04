@@ -2,8 +2,16 @@ import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
-import { articleInputShape } from "./schemas.js";
-import { DEFAULT_PAGE_SIZE, DESTRUCTIVE, RO, WRITE, pagedResult, text } from "./shared.js";
+import { articleInputShape, articleUpdateShape } from "./schemas.js";
+import {
+  DEFAULT_PAGE_SIZE,
+  DESTRUCTIVE,
+  RO,
+  WRITE,
+  deepMergePatch,
+  pagedResult,
+  text,
+} from "./shared.js";
 
 /** Read tools for articles (products/services). Always registered. */
 export function registerArticleReadTools(server: McpServer, client: LexwareClient): void {
@@ -69,15 +77,27 @@ export function registerArticleWriteTools(server: McpServer, client: LexwareClie
     {
       name: "update-article",
       description:
-        "Update an existing article. Pass the current `version` (optimistic locking) from get-article; a stale version is rejected with 409.",
+        "Update an existing article. Read-modify-write: the current article is fetched and your fields are " +
+        "merged over it, so omitted fields aren't wiped and you can change just the price. Pass `version` for " +
+        "optimistic locking (omit to use the latest); a stale version is rejected with 409.",
       inputSchema: {
         id: z.string(),
-        version: z.number().int().describe("Current version from get-article."),
-        ...articleInputShape,
+        version: z
+          .number()
+          .int()
+          .optional()
+          .describe("Current version from get-article (optimistic lock). Omit to use the latest."),
+        ...articleUpdateShape,
       },
       annotations: WRITE,
     },
-    async ({ id, ...body }) => {
+    async ({ id, version, ...fields }) => {
+      // Read-modify-write: lexoffice PUT replaces the whole article, so merge over the current one.
+      const current = await client.get<Record<string, unknown>>(`/v1/articles/${encodeURIComponent(id)}`);
+      const body = deepMergePatch(current, {
+        ...fields,
+        version: version ?? (current.version as number),
+      });
       const updated = await client.request<{ id: string; version: number }>(
         "PUT",
         `/v1/articles/${encodeURIComponent(id)}`,
