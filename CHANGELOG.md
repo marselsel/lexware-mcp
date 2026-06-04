@@ -4,9 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1]
 
 ### Added
+- Advertised MCP server version bumped to **0.1.1** — reflects the expanded tool surface
+  (41 → 58 tools) and the read-modify-write update tools; the version change also nudges MCP
+  clients to refresh a stale cached tool list (e.g. so `update-contact`/`create-contact`
+  pick up the `addresses` and `company.vatRegistrationId`/`taxNumber`/`allowTaxFreeInvoices` fields).
 - **Files & PDF (binary) support** — the client now speaks binary, not just JSON:
   - `download-file` (GET a stored file) and document `render-<type>-pdf`
     (invoice/quotation/credit-note/delivery-note: render via `/document`, then download)
