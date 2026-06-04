@@ -2,16 +2,14 @@ import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
-import { articleInputShape, articleUpdateShape } from "./schemas.js";
 import {
-  DEFAULT_PAGE_SIZE,
-  DESTRUCTIVE,
-  RO,
-  WRITE,
-  deepMergePatch,
-  pagedResult,
-  text,
-} from "./shared.js";
+  articleInputShape,
+  articleUpdateShape,
+  pageParam,
+  sizeParam,
+  versionParam,
+} from "./schemas.js";
+import { DESTRUCTIVE, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
 
 /** Read tools for articles (products/services). Always registered. */
 export function registerArticleReadTools(server: McpServer, client: LexwareClient): void {
@@ -24,8 +22,8 @@ export function registerArticleReadTools(server: McpServer, client: LexwareClien
         articleNumber: z.string().optional(),
         gtin: z.string().optional(),
         type: z.enum(["PRODUCT", "SERVICE"]).optional(),
-        page: z.number().int().min(0).default(0),
-        size: z.number().int().min(1).max(250).default(DEFAULT_PAGE_SIZE),
+        page: pageParam,
+        size: sizeParam,
       },
       annotations: RO,
     },
@@ -82,11 +80,7 @@ export function registerArticleWriteTools(server: McpServer, client: LexwareClie
         "optimistic locking (omit to use the latest); a stale version is rejected with 409.",
       inputSchema: {
         id: z.string(),
-        version: z
-          .number()
-          .int()
-          .optional()
-          .describe("Current version from get-article (optimistic lock). Omit to use the latest."),
+        version: versionParam("get-article"),
         ...articleUpdateShape,
       },
       annotations: WRITE,

@@ -2,16 +2,16 @@ import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
-import { contactInputShape, contactUpdateShape } from "./schemas.js";
 import {
-  DEFAULT_PAGE_SIZE,
-  RO,
-  WRITE,
-  deepMergePatch,
-  mergeAddresses,
-  pagedResult,
-  text,
-} from "./shared.js";
+  contactInputShape,
+  contactUpdateShape,
+  jsonBool,
+  jsonNum,
+  pageParam,
+  sizeParam,
+  versionParam,
+} from "./schemas.js";
+import { RO, WRITE, deepMergePatch, mergeAddresses, pagedResult, text } from "./shared.js";
 
 /** Read tools for contacts. Always registered. */
 export function registerContactReadTools(server: McpServer, client: LexwareClient): void {
@@ -23,11 +23,11 @@ export function registerContactReadTools(server: McpServer, client: LexwareClien
       inputSchema: {
         email: z.string().min(3).optional().describe("Substring match, min 3 chars."),
         name: z.string().min(3).optional().describe("Substring match, min 3 chars."),
-        number: z.number().int().optional().describe("Contact number."),
-        customer: z.boolean().optional(),
-        vendor: z.boolean().optional(),
-        page: z.number().int().min(0).default(0),
-        size: z.number().int().min(1).max(250).default(DEFAULT_PAGE_SIZE),
+        number: jsonNum(z.number().int().optional()).describe("Contact number."),
+        customer: jsonBool(z.boolean().optional()),
+        vendor: jsonBool(z.boolean().optional()),
+        page: pageParam,
+        size: sizeParam,
       },
       annotations: RO,
     },
@@ -91,11 +91,7 @@ export function registerContactDraftTools(server: McpServer, client: LexwareClie
         "to use the latest.",
       inputSchema: {
         id: z.string(),
-        version: z
-          .number()
-          .int()
-          .optional()
-          .describe("Current version from get-contact (optimistic lock). Omit to use the latest."),
+        version: versionParam("get-contact"),
         ...contactUpdateShape,
       },
       annotations: WRITE,

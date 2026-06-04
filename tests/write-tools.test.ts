@@ -245,3 +245,31 @@ describe("get-vouchers (batch read)", () => {
     expect(res.structuredContent.errors.map((e) => e.id)).toEqual(["bad"]);
   });
 });
+
+describe("get-document dispatch + get-voucher-file", () => {
+  it("get-document routes by voucherType and rejects unknown types", async () => {
+    const get = vi.fn(async (path: string) => ({ path }));
+    const client = { get } as unknown as LexwareClient;
+    const handlers = handlersFor((s, c) => registerDocumentReadTools(s, c, "https://app.test"), client);
+    await handlers["get-document"]({ id: "x", voucherType: "purchaseinvoice" });
+    expect(get).toHaveBeenCalledWith("/v1/vouchers/x");
+    await handlers["get-document"]({ id: "y", voucherType: "quotation" });
+    expect(get).toHaveBeenCalledWith("/v1/quotations/y");
+    await expect(handlers["get-document"]({ id: "z", voucherType: "bogus" })).rejects.toThrow(
+      /Unknown voucherType/,
+    );
+  });
+
+  it("get-voucher-file resolves the voucher's file id and downloads it", async () => {
+    const get = vi.fn(async () => ({ files: ["file-7"] }));
+    const getBinary = vi.fn(async () => ({ data: Buffer.from("%PDF-1.6"), contentType: "application/pdf" }));
+    const client = { get, getBinary } as unknown as LexwareClient;
+    const handlers = handlersFor((s, c) => registerDocumentReadTools(s, c, "https://app.test"), client);
+    const res = (await handlers["get-voucher-file"]({ id: "v1", fileIndex: 0 })) as {
+      structuredContent: { fileId: string };
+    };
+    expect(get).toHaveBeenCalledWith("/v1/vouchers/v1");
+    expect(getBinary).toHaveBeenCalledWith("/v1/files/file-7");
+    expect(res.structuredContent.fileId).toBe("file-7");
+  });
+});

@@ -3,8 +3,18 @@ import { embeddedResource, type McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import { type Paged, VOUCHER_STATUSES, VOUCHER_TYPES, type VoucherlistEntry } from "../lexware/types.js";
-import { genericDocumentInputShape, invoiceInputShape, jsonObj, quotationInputShape } from "./schemas.js";
-import { DEFAULT_PAGE_SIZE, LOCAL_RO, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
+import {
+  genericDocumentInputShape,
+  invoiceInputShape,
+  jsonBool,
+  jsonNum,
+  jsonObj,
+  pageParam,
+  quotationInputShape,
+  sizeParam,
+  versionParam,
+} from "./schemas.js";
+import { LOCAL_RO, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
 
 /** A Lexware voucher-document type and how to create it. */
 interface DocType {
@@ -55,6 +65,26 @@ const DEEPLINK_RESOURCES = [
   "contacts",
 ] as const;
 
+/**
+ * Map a voucherlist `voucherType` to its REST resource path, so get-document can
+ * dispatch a voucherlist row to the right endpoint. Bookkeeping types (purchase
+ * and sales invoices/credit-notes) resolve via `/vouchers`; the rest via their endpoint.
+ */
+const VOUCHERTYPE_TO_PATH: Record<string, string> = {
+  invoice: "invoices",
+  creditnote: "credit-notes",
+  orderconfirmation: "order-confirmations",
+  quotation: "quotations",
+  deliverynote: "delivery-notes",
+  downpaymentinvoice: "down-payment-invoices",
+  dunning: "dunnings",
+  purchaseinvoice: "vouchers",
+  purchasecreditnote: "vouchers",
+  salesinvoice: "vouchers",
+  salescreditnote: "vouchers",
+  voucher: "vouchers",
+};
+
 /** Read tools for financial documents. Always registered. */
 export function registerDocumentReadTools(
   server: McpServer,
@@ -72,9 +102,9 @@ export function registerDocumentReadTools(
         contactId: z.string().optional(),
         voucherDateFrom: z.string().optional().describe("ISO date lower bound."),
         voucherDateTo: z.string().optional().describe("ISO date upper bound."),
-        archived: z.boolean().optional(),
-        page: z.number().int().min(0).default(0),
-        size: z.number().int().min(1).max(250).default(DEFAULT_PAGE_SIZE),
+        archived: jsonBool(z.boolean().optional()),
+        page: pageParam,
+        size: sizeParam,
       },
       annotations: RO,
     },
@@ -148,7 +178,7 @@ export function registerDocumentReadTools(
     {
       name: "get-voucher",
       description:
-        "Get a single bookkeeping voucher by id — the full object, including contactId for referenced contacts (collective vouchers have only contactName) and files[] (ids of attached receipts). Note: voucherlist rows of type 'invoice' resolve via get-invoice, 'quotation' via get-quotation, etc. — only manually-booked vouchers resolve here.",
+        "Get a single bookkeeping voucher by id — the full object, including contactId for referenced contacts (collective vouchers have only contactName) and files[] (ids of attached receipts). Note: voucherlist rows of type 'invoice' resolve via get-invoice, 'quotation' via get-quotation, etc. — only manually-booked vouchers resolve here. There is no festgeschrieben/lock flag in the payload; a locked (filed-VAT-period) voucher only surfaces as an error on a write attempt.",
       inputSchema: { id: z.string() },
       annotations: RO,
     },
@@ -187,6 +217,65 @@ export function registerDocumentReadTools(
           `Fetched ${vouchers.length}/${(ids as string[]).length} voucher(s)` +
             (errors.length ? `; ${errors.length} failed.` : "."),
         ),
+      };
+    },
+  );
+
+  server.registerTool(
+    {
+      name: "get-document",
+      description:
+        "Fetch a financial document by id, auto-dispatching to the correct endpoint from its voucherlist " +
+        "`voucherType` — so you don't choose get-invoice vs get-voucher vs get-quotation, etc. Pass the id and " +
+        "the voucherType exactly as get-voucherlist returns it (e.g. 'invoice', 'purchaseinvoice', 'quotation').",
+      inputSchema: {
+        id: z.string(),
+        voucherType: z.string().describe("The voucherlist voucherType for this id."),
+      },
+      annotations: RO,
+    },
+    async ({ id, voucherType }) => {
+      const path = VOUCHERTYPE_TO_PATH[voucherType];
+      if (!path) {
+        throw new Error(
+          `Unknown voucherType "${voucherType}". Known: ${Object.keys(VOUCHERTYPE_TO_PATH).join(", ")}.`,
+        );
+      }
+      const doc = await client.get<Record<string, unknown>>(`/v1/${path}/${encodeURIComponent(id)}`);
+      return { structuredContent: doc, content: text(`${voucherType} ${id} retrieved via /${path}.`) };
+    },
+  );
+
+  server.registerTool(
+    {
+      name: "get-voucher-file",
+      description:
+        "Download the receipt attached to a bookkeeping voucher in one call: resolves the voucher's file id " +
+        "and returns the file inline (instead of get-voucher then download-file). Use fileIndex to pick a " +
+        "different attachment when a voucher has several.",
+      inputSchema: {
+        id: z.string().describe("The voucher id."),
+        fileIndex: jsonNum(z.number().int().min(0).default(0)).describe("Which attached file (0 = first)."),
+      },
+      annotations: RO,
+    },
+    async ({ id, fileIndex }) => {
+      const voucher = await client.get<{ files?: string[] }>(`/v1/vouchers/${encodeURIComponent(id)}`);
+      const fileId = voucher.files?.[fileIndex as number];
+      if (!fileId) {
+        throw new Error(`Voucher ${id} has no attached file at index ${fileIndex}.`);
+      }
+      const { data, contentType } = await client.getBinary(`/v1/files/${encodeURIComponent(fileId)}`);
+      return {
+        structuredContent: { voucherId: id, fileId, mimeType: contentType, byteLength: data.length },
+        content: [
+          ...text(`Downloaded voucher ${id} receipt (${data.length} bytes, ${contentType}).`),
+          embeddedResource({
+            uri: `lexware://files/${fileId}`,
+            mimeType: contentType,
+            blob: data.toString("base64"),
+          }),
+        ],
       };
     },
   );
@@ -259,11 +348,7 @@ export function registerDocumentDraftTools(server: McpServer, client: LexwareCli
           `optimistic locking (omit to use the latest). Only drafts are editable; a finalized document cannot be changed.`,
         inputSchema: {
           id: z.string(),
-          version: z
-            .number()
-            .int()
-            .optional()
-            .describe(`Current version from get-${doc.key} (optimistic lock). Omit to use the latest.`),
+          version: versionParam(`get-${doc.key}`),
           ...updateShape,
         },
         annotations: WRITE,

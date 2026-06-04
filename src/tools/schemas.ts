@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_PAGE_SIZE } from "./shared.js";
 
 /**
  * Shared zod schemas for Lexware write payloads.
@@ -26,6 +27,29 @@ export const jsonObj = <T extends z.ZodTypeAny>(schema: T) =>
     }
     return value;
   }, schema);
+
+/** Accept a boolean param a client serialised as the string "true"/"false". */
+export const jsonBool = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((v) => (v === "true" ? true : v === "false" ? false : v), schema);
+
+/** Accept a numeric param a client serialised as a string (e.g. "25"). */
+export const jsonNum = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess(
+    (v) => (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v),
+    schema,
+  );
+
+/** Optimistic-locking `version` param (number, string-coerced) for update tools. */
+export const versionParam = (noun: string) =>
+  jsonNum(z.number().int().optional()).describe(
+    `Current version from ${noun} (optimistic lock). Omit to use the latest.`,
+  );
+
+/** Shared paging params for list tools (string-coerced). */
+export const pageParam = jsonNum(z.number().int().min(0).default(0)).describe("0-based page index.");
+export const sizeParam = jsonNum(z.number().int().min(1).max(250).default(DEFAULT_PAGE_SIZE)).describe(
+  "Page size (max 250).",
+);
 
 export const moneySchema = z
   .object({
@@ -159,17 +183,42 @@ export const articleUpdateShape = {
 // Shared contact sub-schemas (used by both create and update). All lenient.
 const contactRolesSchema = z
   .object({
-    customer: z.object({}).passthrough().optional(),
-    vendor: z.object({}).passthrough().optional(),
+    customer: z.object({ number: jsonNum(z.number().int().optional()) }).passthrough().optional(),
+    vendor: z.object({ number: jsonNum(z.number().int().optional()) }).passthrough().optional(),
   })
   .passthrough();
 
 const contactPersonBase = { salutation: z.string().optional(), firstName: z.string().optional() };
 
+const contactPersonsSchema = z.array(
+  z
+    .object({
+      salutation: z.string().optional(),
+      firstName: z.string().optional(),
+      lastName: z.string().optional(),
+      primary: jsonBool(z.boolean().optional()),
+      emailAddress: z.string().optional(),
+      phoneNumber: z.string().optional(),
+    })
+    .passthrough(),
+);
+
+const contactPhoneNumbersSchema = z
+  .object({
+    business: z.array(z.string()).optional(),
+    office: z.array(z.string()).optional(),
+    mobile: z.array(z.string()).optional(),
+    private: z.array(z.string()).optional(),
+    fax: z.array(z.string()).optional(),
+    other: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
 const contactCompanyFields = {
   vatRegistrationId: z.string().optional().describe('VAT registration ID, e.g. "IE3336483DH".'),
   taxNumber: z.string().optional(),
-  allowTaxFreeInvoices: z.boolean().optional(),
+  allowTaxFreeInvoices: jsonBool(z.boolean().optional()),
+  contactPersons: contactPersonsSchema.optional().describe("Company contact persons."),
 };
 
 const contactAddressEntrySchema = z
@@ -220,6 +269,8 @@ export const contactInputShape = {
   ).optional(),
   addresses: jsonObj(contactAddressesSchema).optional(),
   emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
+  phoneNumbers: jsonObj(contactPhoneNumbersSchema).optional(),
+  archived: jsonBool(z.boolean().optional()).describe("Set true to create the contact archived (rare)."),
   note: z.string().optional(),
 } as const;
 
@@ -243,10 +294,10 @@ export const contactUpdateShape = {
   ).optional(),
   addresses: jsonObj(contactAddressesSchema).optional(),
   emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
-  archived: z
-    .boolean()
-    .optional()
-    .describe("Set true to archive the contact (e.g. hide a duplicate; lexoffice has no contact-merge API)."),
+  phoneNumbers: jsonObj(contactPhoneNumbersSchema).optional(),
+  archived: jsonBool(z.boolean().optional()).describe(
+    "Set true to archive the contact (e.g. hide a duplicate; lexoffice has no contact-merge API).",
+  ),
   note: z.string().optional(),
 } as const;
 
@@ -275,22 +326,19 @@ export const voucherInputShape = {
     .describe('Required. Full ISO date-time with offset, e.g. "2026-06-12T00:00:00.000+02:00".'),
   shippingDate: z.string().optional().describe("Full ISO date-time with offset."),
   dueDate: z.string().optional().describe("Full ISO date-time with offset."),
-  totalGrossAmount: z
-    .number()
-    .optional()
-    .describe("Total gross amount. Must equal the sum of voucherItems[].amount when taxType is gross."),
-  totalTaxAmount: z
-    .number()
-    .optional()
-    .describe("Total tax amount. Must equal the sum of voucherItems[].taxAmount."),
+  totalGrossAmount: jsonNum(z.number().optional()).describe(
+    "Total gross amount. Must equal the sum of voucherItems[].amount when taxType is gross.",
+  ),
+  totalTaxAmount: jsonNum(z.number().optional()).describe(
+    "Total tax amount. Must equal the sum of voucherItems[].taxAmount.",
+  ),
   taxType: z
     .string()
     .optional()
     .describe('"gross" or "net" — whether each voucherItems[].amount is gross or net.'),
-  useCollectiveContact: z
-    .boolean()
-    .optional()
-    .describe("If true, no contactId is required (books to a collective contact)."),
+  useCollectiveContact: jsonBool(z.boolean().optional()).describe(
+    "If true, no contactId is required (books to a collective contact).",
+  ),
   contactId: z
     .string()
     .optional()

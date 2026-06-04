@@ -80,4 +80,21 @@ describe("JSON-string coercion (jsonObj) for object/array params", () => {
     ) as Record<string, unknown>;
     expect(parsed.price).toEqual({ netPrice: 12 });
   });
+
+  it("coerces boolean and number scalar params from strings", () => {
+    const c = parse({ id: z.string(), ...contactUpdateShape }, {
+      id: "c1",
+      archived: "true",
+    }) as Record<string, unknown>;
+    expect(c.archived).toBe(true);
+
+    const v = parse(voucherInputShape, {
+      type: "purchaseinvoice",
+      voucherDate: "2026-06-12T00:00:00.000+02:00",
+      useCollectiveContact: "false",
+      totalGrossAmount: "11.9",
+    }) as Record<string, unknown>;
+    expect(v.useCollectiveContact).toBe(false);
+    expect(v.totalGrossAmount).toBe(11.9);
+  });
 });

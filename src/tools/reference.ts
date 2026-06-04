@@ -1,7 +1,8 @@
 import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
-import { DEFAULT_PAGE_SIZE, RO, text } from "./shared.js";
+import { pageParam, sizeParam } from "./schemas.js";
+import { RO, text } from "./shared.js";
 
 /**
  * Read-only reference + supporting data. Always registered.
@@ -26,7 +27,10 @@ export function registerReferenceReadTools(server: McpServer, client: LexwareCli
   server.registerTool(
     {
       name: "get-payment",
-      description: "Get payment information for a voucher/document by its id.",
+      description:
+        "Get payment information for a voucher/document by its id. NOTE: this is the only payment data the " +
+        "public API exposes — there is no general bank-transaction read/assignment endpoint, and tax returns " +
+        "(e.g. USt-Voranmeldung) are not available via the API, so VAT/§13b reconciliation can't be fully automated.",
       inputSchema: { id: z.string() },
       annotations: RO,
     },
@@ -54,8 +58,8 @@ export function registerReferenceReadTools(server: McpServer, client: LexwareCli
       name: "list-recurring-templates",
       description: "List recurring-invoice templates. Results may be paged (use page/size).",
       inputSchema: {
-        page: z.number().int().min(0).default(0),
-        size: z.number().int().min(1).max(250).default(DEFAULT_PAGE_SIZE),
+        page: pageParam,
+        size: sizeParam,
       },
       annotations: RO,
     },

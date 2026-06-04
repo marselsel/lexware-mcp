@@ -20,6 +20,8 @@ const READ_TOOLS = [
   "get-down-payment-invoice",
   "get-voucher",
   "get-vouchers",
+  "get-document",
+  "get-voucher-file",
   "get-document-link",
   "get-countries",
   "get-payment-conditions",

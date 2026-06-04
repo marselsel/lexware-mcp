@@ -45,7 +45,7 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
         "To link a real contact pass contactId (its custom contactName is auto-cleared and useCollectiveContact " +
         'set false); for a one-off pass contactName. voucherStatus paid/voided/transferred/sepadebit are ' +
         "payment-derived: an unset status is omitted so a paid-but-not-filed voucher stays editable; pass " +
-        'voucherStatus:"voided" to attempt voiding a duplicate (may be web-app-only — the error will say). NOTE: ' +
+        'voucherStatus:"voided" (voiding) and deleting are NOT supported via the public API — UI-only Storno. NOTE: ' +
         "vouchers in an already-filed VAT period are festgeschrieben and cannot be modified or deleted via API " +
         "(web-app Storno only); there is no DELETE endpoint for vouchers. Pass `version` for optimistic locking " +
         "(omit for latest).",
