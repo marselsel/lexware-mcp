@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LexwareClient } from "../src/lexware/client.js";
 import { registerArticleWriteTools } from "../src/tools/articles.js";
 import { registerContactDraftTools } from "../src/tools/contacts.js";
-import { registerDocumentDraftTools } from "../src/tools/documents.js";
+import { registerDocumentDraftTools, registerDocumentReadTools } from "../src/tools/documents.js";
 import { registerVoucherWriteTools } from "../src/tools/vouchers.js";
 
 type Handler = (input: Record<string, unknown>) => Promise<unknown>;
@@ -227,5 +227,21 @@ describe("update-voucher contact + status handling", () => {
     await handlersFor(registerVoucherWriteTools, client)["update-voucher"]({ id: "v3", voucherStatus: "voided" });
     const body = putBody(request);
     expect(body.voucherStatus).toBe("voided");
+  });
+});
+
+describe("get-vouchers (batch read)", () => {
+  it("fetches each id and collects failures into errors instead of throwing", async () => {
+    const get = vi.fn(async (path: string) => {
+      if (path.endsWith("/bad")) throw new Error("Lexware API 404: not found");
+      return { id: path.split("/").pop(), voucherStatus: "open" };
+    });
+    const client = { get } as unknown as LexwareClient;
+    const handlers = handlersFor((s, c) => registerDocumentReadTools(s, c, "https://app.test"), client);
+    const res = (await handlers["get-vouchers"]({ ids: ["a", "bad", "b"] })) as {
+      structuredContent: { vouchers: unknown[]; errors: Array<{ id: string }> };
+    };
+    expect(res.structuredContent.vouchers).toHaveLength(2);
+    expect(res.structuredContent.errors.map((e) => e.id)).toEqual(["bad"]);
   });
 });

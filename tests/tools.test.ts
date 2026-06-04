@@ -19,6 +19,7 @@ const READ_TOOLS = [
   "get-dunning",
   "get-down-payment-invoice",
   "get-voucher",
+  "get-vouchers",
   "get-document-link",
   "get-countries",
   "get-payment-conditions",

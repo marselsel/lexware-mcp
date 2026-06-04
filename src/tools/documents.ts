@@ -3,7 +3,7 @@ import { embeddedResource, type McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import { type Paged, VOUCHER_STATUSES, VOUCHER_TYPES, type VoucherlistEntry } from "../lexware/types.js";
-import { genericDocumentInputShape, invoiceInputShape, quotationInputShape } from "./schemas.js";
+import { genericDocumentInputShape, invoiceInputShape, jsonObj, quotationInputShape } from "./schemas.js";
 import { DEFAULT_PAGE_SIZE, LOCAL_RO, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
 
 /** A Lexware voucher-document type and how to create it. */
@@ -155,6 +155,39 @@ export function registerDocumentReadTools(
     async ({ id }) => {
       const voucher = await client.get<Record<string, unknown>>(`/v1/vouchers/${encodeURIComponent(id)}`);
       return { structuredContent: voucher, content: text(`Voucher ${id} retrieved.`) };
+    },
+  );
+
+  server.registerTool(
+    {
+      name: "get-vouchers",
+      description:
+        "Fetch multiple bookkeeping vouchers by id in one call (each returned in full, like get-voucher) — " +
+        "reduces round-trips when you need many. Fetched sequentially through the ~2 requests/second rate limit, " +
+        "so a full batch of 50 takes ~25s; page through larger sets. Ids that fail are returned in `errors` " +
+        "(not thrown), so one bad id won't fail the batch.",
+      inputSchema: {
+        ids: jsonObj(z.array(z.string()).min(1).max(50)).describe("Voucher ids to fetch (max 50 per call)."),
+      },
+      annotations: RO,
+    },
+    async ({ ids }) => {
+      const vouchers: Record<string, unknown>[] = [];
+      const errors: { id: string; error: string }[] = [];
+      for (const id of ids as string[]) {
+        try {
+          vouchers.push(await client.get<Record<string, unknown>>(`/v1/vouchers/${encodeURIComponent(id)}`));
+        } catch (e) {
+          errors.push({ id, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      return {
+        structuredContent: { vouchers, errors, count: vouchers.length },
+        content: text(
+          `Fetched ${vouchers.length}/${(ids as string[]).length} voucher(s)` +
+            (errors.length ? `; ${errors.length} failed.` : "."),
+        ),
+      };
     },
   );
 
