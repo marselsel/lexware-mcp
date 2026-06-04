@@ -38,6 +38,9 @@ const READ_TOOLS = [
   "render-quotation-pdf",
   "render-credit-note-pdf",
   "render-delivery-note-pdf",
+  "render-order-confirmation-pdf",
+  "render-dunning-pdf",
+  "render-down-payment-invoice-pdf",
   "list-recurring-templates",
 ];
 const DRAFT_TOOLS = [

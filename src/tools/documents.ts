@@ -40,11 +40,11 @@ const DOC_TYPES: DocType[] = [
   { key: "invoice", path: "invoices", label: "invoice", schema: invoiceInputShape, finalize: true, renderable: true },
   { key: "quotation", path: "quotations", label: "quotation", schema: quotationInputShape, finalize: true, renderable: true },
   { key: "credit-note", path: "credit-notes", label: "credit note", schema: genericDocumentInputShape, finalize: true, renderable: true },
-  { key: "order-confirmation", path: "order-confirmations", label: "order confirmation", schema: genericDocumentInputShape, finalize: true, renderable: false },
+  { key: "order-confirmation", path: "order-confirmations", label: "order confirmation", schema: genericDocumentInputShape, finalize: true, renderable: true },
   { key: "delivery-note", path: "delivery-notes", label: "delivery note", schema: genericDocumentInputShape, finalize: true, renderable: true },
-  { key: "dunning", path: "dunnings", label: "dunning", schema: genericDocumentInputShape, finalize: true, renderable: false },
-  // VERIFY (read-only, live): down-payment-invoices are GET-only (no create/finalize); confirm /document before enabling render.
-  { key: "down-payment-invoice", path: "down-payment-invoices", label: "down payment invoice", schema: null, finalize: false, renderable: false },
+  { key: "dunning", path: "dunnings", label: "dunning", schema: genericDocumentInputShape, finalize: true, renderable: true },
+  // down-payment-invoices are GET-only (no create/finalize) but still have a finalized PDF via /{id}/file.
+  { key: "down-payment-invoice", path: "down-payment-invoices", label: "down payment invoice", schema: null, finalize: false, renderable: true },
 ];
 
 /** Document resource paths — the `resourceType` enum for get-document-file. */
@@ -355,10 +355,12 @@ export function registerDocumentDraftTools(
         name: `create-draft-${doc.key}`,
         description:
           `Create a ${doc.label}. By default a DRAFT (editable, not legally issued). Set finalize=true ` +
-          `(+ confirm_finalize; requires LEXWARE_ENABLE_FINALIZE) to issue a LEGALLY BINDING, IRREVERSIBLE ` +
-          `document in one step. Use precedingSalesVoucherId to create it as a follow-up of a preceding voucher.`,
+          `(+ confirm_finalize; requires LEXWARE_ENABLE_FINALIZE) to issue a LEGALLY BINDING document in one ` +
+          `step — IRREVERSIBLE (no void/delete via API). Provide the full document body for a standalone ` +
+          `document; with precedingSalesVoucherId the body (line items/contact) is carried over from that ` +
+          `preceding voucher — dunnings can ONLY be created this way (pursue from an invoice).`,
         inputSchema: {
-          ...doc.schema,
+          ...optionalShape(doc.schema),
           precedingSalesVoucherId: z
             .string()
             .optional()
@@ -456,7 +458,7 @@ export function registerDocumentFinalizeTools(server: McpServer, client: Lexware
         name: `create-finalized-${doc.key}`,
         description: `Create and FINALIZE a ${doc.label} in one step. This issues a LEGALLY BINDING, IRREVERSIBLE document (it cannot be edited or deleted afterwards). Requires confirm_finalize=true. Prefer create-draft-${doc.key} unless the user explicitly wants to issue it now.`,
         inputSchema: {
-          ...doc.schema,
+          ...optionalShape(doc.schema),
           precedingSalesVoucherId: z
             .string()
             .optional()
