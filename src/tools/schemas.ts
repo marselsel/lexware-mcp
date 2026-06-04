@@ -141,7 +141,11 @@ const contactAddressesSchema = z
     shipping: z.array(contactAddressEntrySchema).optional(),
   })
   .passthrough()
-  .describe("Billing/shipping addresses. Include the FULL address (street/zip/city/countryCode).");
+  .describe(
+    "Billing/shipping addresses. countryCode (ISO-3166 alpha-2, e.g. \"IE\") is required by lexoffice for any " +
+      "address. On update a partial address (e.g. just countryCode) is merged into the existing one, so " +
+      "street/zip/city are kept.",
+  );
 
 const contactEmailAddressesSchema = z
   .object({

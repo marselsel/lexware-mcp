@@ -3,7 +3,15 @@ import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
 import { contactInputShape, contactUpdateShape } from "./schemas.js";
-import { DEFAULT_PAGE_SIZE, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
+import {
+  DEFAULT_PAGE_SIZE,
+  RO,
+  WRITE,
+  deepMergePatch,
+  mergeAddresses,
+  pagedResult,
+  text,
+} from "./shared.js";
 
 /** Read tools for contacts. Always registered. */
 export function registerContactReadTools(server: McpServer, client: LexwareClient): void {
@@ -78,7 +86,9 @@ export function registerContactDraftTools(server: McpServer, client: LexwareClie
         "Update a contact. Read-modify-write: the current contact is fetched and your fields are merged over it, " +
         "so existing addresses, emailAddresses and roles are preserved — lexoffice PUT otherwise replaces the whole " +
         "contact. Nested objects like `company` are merged, so you can set just company.vatRegistrationId (without " +
-        "resending the name) or a billing countryCode. Pass `version` for optimistic locking; omit to use the latest.",
+        "resending the name), or a single address field like addresses.billing[0].countryCode — partial addresses " +
+        "are merged into the existing one (street/zip/city are kept). Pass `version` for optimistic locking; omit " +
+        "to use the latest.",
       inputSchema: {
         id: z.string(),
         version: z
@@ -94,10 +104,16 @@ export function registerContactDraftTools(server: McpServer, client: LexwareClie
       // Read-modify-write: load the current contact and merge the caller's fields over
       // it, so omitted addresses/emailAddresses/roles aren't wiped by the full PUT.
       const current = await client.get<Record<string, unknown>>(`/v1/contacts/${encodeURIComponent(id)}`);
+      const { addresses: addressPatch, ...rest } = fields;
       const body = deepMergePatch(current, {
-        ...fields,
+        ...rest,
         version: version ?? (current.version as number),
       });
+      // Addresses merge by index — deepMergePatch would replace the billing array
+      // wholesale, so a partial billing[0] (e.g. just countryCode) must keep street/zip/city.
+      if (addressPatch !== undefined) {
+        body.addresses = mergeAddresses(current.addresses, addressPatch);
+      }
       const updated = await client.request<{ id: string; version: number }>(
         "PUT",
         `/v1/contacts/${encodeURIComponent(id)}`,
