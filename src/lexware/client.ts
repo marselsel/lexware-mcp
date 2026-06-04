@@ -198,7 +198,7 @@ export class LexwareClient {
 
       if (!res.ok) {
         const body = await this.safeParse(res);
-        throw new LexwareApiError(res.status, describeErrorBody(res.status, res.statusText, body));
+        throw new LexwareApiError(res.status, describeErrorBody(res.status, res.statusText, body), body);
       }
 
       return res;

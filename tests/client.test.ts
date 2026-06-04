@@ -141,6 +141,35 @@ describe("LexwareClient", () => {
     expect(err.message).not.toContain("secret-key");
   });
 
+  it("surfaces the Lexware IssueList (source + i18nKey) on a 406 and preserves the raw body", async () => {
+    const issueBody = {
+      IssueList: [
+        { i18nKey: "missing_entity", source: "voucherItems[0].taxRatePercent", type: "validation_failure" },
+        { i18nKey: "regex_mismatch", source: "voucherDate", type: "validation_failure" },
+      ],
+    };
+    const fetchFn = vi.fn(async () => json(issueBody, 406)) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const err = await client.post("/v1/vouchers", { a: 1 }).catch((e) => e);
+    expect(err).toBeInstanceOf(LexwareApiError);
+    expect(err.status).toBe(406);
+    expect(err.kind).toBe("validation");
+    // The field path (source) and reason (i18nKey) must come through — not just "validation_failure".
+    expect(err.message).toContain("voucherItems[0].taxRatePercent");
+    expect(err.message).toContain("missing_entity");
+    expect(err.message).toContain("voucherDate");
+    // The full parsed body is preserved for downstream inspection.
+    expect(err.body).toEqual(issueBody);
+  });
+
+  it("never swallows an unrecognized error body (raw-JSON fallback)", async () => {
+    const fetchFn = vi.fn(async () => json({ weird: "shape", code: 17 }, 422)) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const err = await client.get("/v1/vouchers/x").catch((e) => e);
+    expect(err.message).toContain("weird");
+    expect(err.message).toContain("shape");
+  });
+
   it("classifies 401 as auth", async () => {
     const fetchFn = vi.fn(async () => json({}, 401)) as unknown as typeof fetch;
     const client = makeClient(fetchFn);
