@@ -13,8 +13,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc -b --force",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "deploy": "alpic deploy"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -27,7 +26,6 @@
     "@skybridge/devtools": "^1.0.0",
     "@types/express": "^5.0.6",
     "@types/node": "^24.12.0",
-    "alpic": "^1.104.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.2",
     "vitest": "^4.1.8"
