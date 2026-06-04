@@ -2,8 +2,8 @@ import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
-import { contactInputShape } from "./schemas.js";
-import { DEFAULT_PAGE_SIZE, RO, WRITE, pagedResult, text } from "./shared.js";
+import { contactInputShape, contactUpdateShape } from "./schemas.js";
+import { DEFAULT_PAGE_SIZE, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
 
 /** Read tools for contacts. Always registered. */
 export function registerContactReadTools(server: McpServer, client: LexwareClient): void {
@@ -75,18 +75,29 @@ export function registerContactDraftTools(server: McpServer, client: LexwareClie
     {
       name: "update-contact",
       description:
-        "Update an existing contact. You must pass the current `version` (optimistic locking) — read it first with get-contact; a stale version is rejected with 409.",
+        "Update a contact. Read-modify-write: the current contact is fetched and your fields are merged over it, " +
+        "so existing addresses, emailAddresses and roles are preserved — lexoffice PUT otherwise replaces the whole " +
+        "contact. Nested objects like `company` are merged, so you can set just company.vatRegistrationId (without " +
+        "resending the name) or a billing countryCode. Pass `version` for optimistic locking; omit to use the latest.",
       inputSchema: {
         id: z.string(),
-        version: z.number().int().describe("Current version from get-contact."),
-        ...contactInputShape,
+        version: z
+          .number()
+          .int()
+          .optional()
+          .describe("Current version from get-contact (optimistic lock). Omit to use the latest."),
+        ...contactUpdateShape,
       },
       annotations: WRITE,
     },
-    async ({ id, ...body }) => {
-      if (!body.person && !body.company) {
-        throw new Error("Provide either a person (with lastName) or a company (with name).");
-      }
+    async ({ id, version, ...fields }) => {
+      // Read-modify-write: load the current contact and merge the caller's fields over
+      // it, so omitted addresses/emailAddresses/roles aren't wiped by the full PUT.
+      const current = await client.get<Record<string, unknown>>(`/v1/contacts/${encodeURIComponent(id)}`);
+      const body = deepMergePatch(current, {
+        ...fields,
+        version: version ?? (current.version as number),
+      });
       const updated = await client.request<{ id: string; version: number }>(
         "PUT",
         `/v1/contacts/${encodeURIComponent(id)}`,

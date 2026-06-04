@@ -1,8 +1,8 @@
 import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
-import { voucherInputShape } from "./schemas.js";
-import { WRITE, text } from "./shared.js";
+import { voucherInputShape, voucherUpdateShape } from "./schemas.js";
+import { WRITE, deepMergePatch, text } from "./shared.js";
 
 /**
  * Write tools for bookkeeping vouchers (manually-booked sales/purchase
@@ -30,17 +30,30 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
     {
       name: "update-voucher",
       description:
-        "Update an existing bookkeeping voucher. Pass the current `version` from get-voucher (optimistic " +
-        "locking); a stale version is rejected with 409.",
+        "Update a bookkeeping voucher. Read-modify-write: the current voucher is fetched and your fields are " +
+        "merged over it, so attached files and untouched fields (voucherNumber, voucherStatus, contact, …) are " +
+        "preserved — lexoffice PUT otherwise replaces the whole voucher. Send only what you want to change, " +
+        "e.g. { id, voucherItems: [...] }. If you send voucherItems it REPLACES the whole list, so include every " +
+        "line. Pass `version` for optimistic locking (a stale version → 409); omit it to apply to the latest.",
       inputSchema: {
         id: z.string(),
-        // VERIFY: vouchers use the same optimistic-locking `version` as other resources.
-        version: z.number().int().describe("Current version from get-voucher."),
-        ...voucherInputShape,
+        version: z
+          .number()
+          .int()
+          .optional()
+          .describe("Current version from get-voucher (optimistic lock). Omit to use the latest."),
+        ...voucherUpdateShape,
       },
       annotations: WRITE,
     },
-    async ({ id, ...body }) => {
+    async ({ id, version, ...fields }) => {
+      // Read-modify-write: lexoffice PUT replaces the whole resource, so load the
+      // current voucher and merge the caller's fields over it (keeping files etc.).
+      const current = await client.get<Record<string, unknown>>(`/v1/vouchers/${encodeURIComponent(id)}`);
+      const body = deepMergePatch(current, {
+        ...fields,
+        version: version ?? (current.version as number),
+      });
       const updated = await client.request<{ id: string; version: number }>(
         "PUT",
         `/v1/vouchers/${encodeURIComponent(id)}`,

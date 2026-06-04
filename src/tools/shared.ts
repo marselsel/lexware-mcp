@@ -24,3 +24,34 @@ export function pagedResult<T>(result: Paged<T>, noun: string) {
     ),
   };
 }
+
+/** True for a non-null, non-array object. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Read-modify-write merge: overlay `patch` onto `base`, recursing into nested
+ * objects so a partial sub-object (e.g. `{ company: { vatRegistrationId } }`)
+ * updates one field without wiping its siblings (`company.name`). Arrays and
+ * scalars replace wholesale; an `undefined` patch value leaves the base untouched
+ * (callers preserve a field by simply omitting it); an explicit `null` clears it.
+ *
+ * Lexware/lexoffice `PUT` replaces the WHOLE resource, so update tools must GET the
+ * current object and merge the caller's fields over it — otherwise omitted fields
+ * (attached files, addresses, voucherNumber, …) would be silently wiped and
+ * required fields would 406.
+ */
+export function deepMergePatch(
+  base: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    const existing = out[key];
+    out[key] =
+      isPlainObject(value) && isPlainObject(existing) ? deepMergePatch(existing, value) : value;
+  }
+  return out;
+}
