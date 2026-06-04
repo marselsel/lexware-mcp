@@ -28,12 +28,12 @@ Related projects — local (stdio) Lexware MCP servers:
 
 ## Capabilities
 
-~58 tools across three tiers you enable via environment variables:
+65 tools across three tiers you enable via environment variables:
 
 | Tier | Default | What it covers |
 |------|---------|----------------|
-| **Read** | always on | Profile; contacts & articles (list/get); the voucherlist; full documents (invoices, quotations, credit notes, order confirmations, delivery notes, dunnings, down-payment invoices, vouchers); **render documents to PDF** and **download files** (returned inline as embedded resources); payments; reference data (countries, payment conditions, posting categories, print layouts); recurring templates (get & list); event subscriptions; document deeplinks |
-| **Drafts/writes** (`LEXWARE_ENABLE_DRAFTS`) | on | Create **and update draft** invoices/quotations/credit-notes/order-confirmations/delivery-notes/dunnings; create & update contacts, articles, and **bookkeeping vouchers**; **upload files** and **attach receipts** to vouchers; create event subscriptions |
+| **Read** | always on | Profile; contacts & articles (list/get); the voucherlist; full documents (invoices, quotations, credit notes, order confirmations, delivery notes, dunnings, down-payment invoices, vouchers); **render any document type to PDF** and **download files/receipts** (returned inline as embedded resources); batch & type-dispatched reads (get-vouchers, get-document, get-voucher-file, get-document-file); payments; reference data (countries, payment conditions, posting categories, print layouts); recurring templates (get & list); event subscriptions; document deeplinks |
+| **Drafts/writes** (`LEXWARE_ENABLE_DRAFTS`) | on | Create **and update draft** invoices/quotations/credit-notes/order-confirmations/delivery-notes/dunnings; create & update contacts, articles, and **bookkeeping vouchers**; **upload files** and **attach receipts** to vouchers; create event subscriptions; optionally issue documents **finalized** (`finalize=true`, requires `LEXWARE_ENABLE_FINALIZE`) or as **follow-ups** (`precedingSalesVoucherId`) |
 | **Finalize** (`LEXWARE_ENABLE_FINALIZE`) | off | Issue **legally binding** finalized documents (confirmation-gated); irreversible deletes (articles, event subscriptions) |
 
 Set `LEXWARE_READ_ONLY=true` to force read-only (overrides the flags above).

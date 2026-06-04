@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - Advertised MCP server version bumped to **0.1.1** — reflects the expanded tool surface
-  (41 → 58 tools) and the read-modify-write update tools; the version change also nudges MCP
+  (41 → 65 tools) and the read-modify-write update tools; the version change also nudges MCP
   clients to refresh a stale cached tool list (e.g. so `update-contact`/`create-contact`
   pick up the `addresses` and `company.vatRegistrationId`/`taxNumber`/`allowTaxFreeInvoices` fields).
 - **Files & PDF (binary) support** — the client now speaks binary, not just JSON:
