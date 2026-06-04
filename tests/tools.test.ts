@@ -21,6 +21,7 @@ const READ_TOOLS = [
   "get-voucher",
   "get-vouchers",
   "get-document",
+  "get-document-file",
   "get-voucher-file",
   "get-document-link",
   "get-countries",

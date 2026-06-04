@@ -47,6 +47,9 @@ const DOC_TYPES: DocType[] = [
   { key: "down-payment-invoice", path: "down-payment-invoices", label: "down payment invoice", schema: null, finalize: false, renderable: false },
 ];
 
+/** Document resource paths — the `resourceType` enum for get-document-file. */
+const DOC_FILE_PATHS = DOC_TYPES.map((d) => d.path) as [string, ...string[]];
+
 /**
  * Resource segments for the Lexware **web-app permalink**
  * (`{app}/permalink/{resource}/{action}/{id}`). NOTE: these are the
@@ -139,32 +142,28 @@ export function registerDocumentReadTools(
     );
   }
 
-  // render-<doctype>-pdf: materialize a document as a PDF and return the bytes.
+  // render-<doctype>-pdf: download a document's finalized PDF.
   for (const doc of DOC_TYPES) {
     if (!doc.renderable) continue;
     server.registerTool(
       {
         name: `render-${doc.key}-pdf`,
         description:
-          `Render a ${doc.label} to PDF and return the file inline. Calls GET /v1/${doc.path}/{id}/document to ` +
-          `materialize the PDF, then downloads it. Note: Lexware generally renders only a finalized document.`,
+          `Download the finalized PDF of a ${doc.label} (GET /v1/${doc.path}/{id}/file) and return it inline. ` +
+          `The document must be FINALIZED — a draft has no file yet. (get-document-file is the generic form.)`,
         inputSchema: { id: z.string() },
         annotations: RO,
       },
       async ({ id }) => {
-        // Two-step per the Lexware docs: /document returns a file id, then GET /v1/files/{id} is the binary.
-        const { documentFileId } = await client.get<{ documentFileId: string }>(
-          `/v1/${doc.path}/${encodeURIComponent(id)}/document`,
-        );
         const { data, contentType } = await client.getBinary(
-          `/v1/files/${encodeURIComponent(documentFileId)}`,
+          `/v1/${doc.path}/${encodeURIComponent(id)}/file`,
         );
         return {
-          structuredContent: { documentFileId, mimeType: contentType, byteLength: data.length },
+          structuredContent: { resource: doc.path, id, mimeType: contentType, byteLength: data.length },
           content: [
-            ...text(`Rendered ${doc.label} ${id} to PDF (${data.length} bytes).`),
+            ...text(`Downloaded ${doc.label} ${id} PDF (${data.length} bytes).`),
             embeddedResource({
-              uri: `lexware://files/${documentFileId}`,
+              uri: `lexware://${doc.path}/${id}/file`,
               mimeType: contentType,
               blob: data.toString("base64"),
             }),
@@ -248,6 +247,36 @@ export function registerDocumentReadTools(
 
   server.registerTool(
     {
+      name: "get-document-file",
+      description:
+        "Download the finalized PDF of a document by resource + id (GET /v1/{resourceType}/{id}/file), returned " +
+        "inline. The document must be FINALIZED. resourceType is the REST path, e.g. 'invoices', 'credit-notes'.",
+      inputSchema: {
+        resourceType: z.enum(DOC_FILE_PATHS).describe("Document resource path, e.g. 'invoices', 'credit-notes'."),
+        id: z.string(),
+      },
+      annotations: RO,
+    },
+    async ({ resourceType, id }) => {
+      const { data, contentType } = await client.getBinary(
+        `/v1/${resourceType}/${encodeURIComponent(id)}/file`,
+      );
+      return {
+        structuredContent: { resource: resourceType, id, mimeType: contentType, byteLength: data.length },
+        content: [
+          ...text(`Downloaded ${resourceType} ${id} PDF (${data.length} bytes).`),
+          embeddedResource({
+            uri: `lexware://${resourceType}/${id}/file`,
+            mimeType: contentType,
+            blob: data.toString("base64"),
+          }),
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    {
       name: "get-voucher-file",
       description:
         "Download the receipt attached to a bookkeeping voucher in one call: resolves the voucher's file id " +
@@ -314,21 +343,63 @@ function optionalShape(shape: ZodRawShapeCompat): ZodRawShapeCompat {
 }
 
 /** Draft-creation tools for every writable document type. Registered with the drafts tier. */
-export function registerDocumentDraftTools(server: McpServer, client: LexwareClient): void {
+export function registerDocumentDraftTools(
+  server: McpServer,
+  client: LexwareClient,
+  finalizeEnabled: boolean,
+): void {
   for (const doc of DOC_TYPES) {
     if (!doc.schema) continue;
     server.registerTool(
       {
         name: `create-draft-${doc.key}`,
-        description: `Create a DRAFT ${doc.label} (not finalized). Editable in Lexware and NOT legally issued until finalized there. Returns the new id.`,
-        inputSchema: doc.schema,
+        description:
+          `Create a ${doc.label}. By default a DRAFT (editable, not legally issued). Set finalize=true ` +
+          `(+ confirm_finalize; requires LEXWARE_ENABLE_FINALIZE) to issue a LEGALLY BINDING, IRREVERSIBLE ` +
+          `document in one step. Use precedingSalesVoucherId to create it as a follow-up of a preceding voucher.`,
+        inputSchema: {
+          ...doc.schema,
+          precedingSalesVoucherId: z
+            .string()
+            .optional()
+            .describe(
+              "Create as a follow-up of this preceding sales voucher id (e.g. quotation→order-confirmation→" +
+                "invoice, invoice→credit-note/dunning). POSTs ?precedingSalesVoucherId={id}.",
+            ),
+          finalize: jsonBool(z.boolean().optional()).describe(
+            "Issue a legally-binding FINALIZED document (POST ?finalize=true) instead of a draft. IRREVERSIBLE; " +
+              "requires LEXWARE_ENABLE_FINALIZE and confirm_finalize=true.",
+          ),
+          confirm_finalize: z.literal(true).optional().describe("Must be true when finalize=true."),
+        },
         annotations: WRITE,
       },
-      async (input) => {
-        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, input);
+      async ({ finalize, confirm_finalize, precedingSalesVoucherId, ...input }) => {
+        const query: Record<string, string | boolean> = {};
+        if (precedingSalesVoucherId) query.precedingSalesVoucherId = precedingSalesVoucherId;
+        let finalized = false;
+        if (finalize) {
+          if (!finalizeEnabled) {
+            throw new Error(
+              "Finalizing is disabled. Set LEXWARE_ENABLE_FINALIZE=true to issue a legally-binding document.",
+            );
+          }
+          if (confirm_finalize !== true) {
+            throw new Error(
+              "Set confirm_finalize=true to acknowledge this issues a legally binding, irreversible document.",
+            );
+          }
+          query.finalize = true;
+          finalized = true;
+        }
+        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, input, query);
         return {
-          structuredContent: { ...created, finalized: false },
-          content: text(`Created DRAFT ${doc.label} ${created.id} (not finalized).`),
+          structuredContent: { ...created, finalized },
+          content: text(
+            finalized
+              ? `FINALIZED ${doc.label} ${created.id} (legally binding). This cannot be undone.`
+              : `Created DRAFT ${doc.label} ${created.id} (not finalized).`,
+          ),
         };
       },
     );
@@ -386,14 +457,20 @@ export function registerDocumentFinalizeTools(server: McpServer, client: Lexware
         description: `Create and FINALIZE a ${doc.label} in one step. This issues a LEGALLY BINDING, IRREVERSIBLE document (it cannot be edited or deleted afterwards). Requires confirm_finalize=true. Prefer create-draft-${doc.key} unless the user explicitly wants to issue it now.`,
         inputSchema: {
           ...doc.schema,
+          precedingSalesVoucherId: z
+            .string()
+            .optional()
+            .describe("Create as a follow-up of this preceding sales voucher id."),
           confirm_finalize: z
             .literal(true)
             .describe("Must be true to acknowledge this issues a legally binding document."),
         },
         annotations: WRITE,
       },
-      async ({ confirm_finalize: _confirm, ...input }) => {
-        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, input, { finalize: true });
+      async ({ confirm_finalize: _confirm, precedingSalesVoucherId, ...input }) => {
+        const query: Record<string, string | boolean> = { finalize: true };
+        if (precedingSalesVoucherId) query.precedingSalesVoucherId = precedingSalesVoucherId;
+        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, input, query);
         return {
           structuredContent: { ...created, finalized: true },
           content: text(`FINALIZED ${doc.label} ${created.id} (legally binding). This cannot be undone.`),

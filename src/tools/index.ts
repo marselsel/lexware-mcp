@@ -42,7 +42,7 @@ export function registerTools(server: McpServer, client: LexwareClient, config: 
   if (capabilities.drafts) {
     registerContactDraftTools(server, client);
     registerArticleWriteTools(server, client);
-    registerDocumentDraftTools(server, client);
+    registerDocumentDraftTools(server, client, capabilities.finalize);
     registerVoucherWriteTools(server, client);
     registerFileWriteTools(server, client);
     registerEventSubscriptionWriteTools(server, client);

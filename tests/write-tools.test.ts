@@ -273,3 +273,76 @@ describe("get-document dispatch + get-voucher-file", () => {
     expect(res.structuredContent.fileId).toBe("file-7");
   });
 });
+
+const docBody = {
+  voucherDate: "2026-06-01T00:00:00.000+02:00",
+  address: { contactId: "c1" },
+  lineItems: [{ type: "custom", name: "x" }],
+  totalPrice: { currency: "EUR" },
+  taxConditions: { taxType: "net" },
+  shippingConditions: { shippingType: "none" },
+};
+
+describe("create-draft finalize gating + precedingSalesVoucherId", () => {
+  it("creates a draft and passes precedingSalesVoucherId as a query", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client);
+    await handlers["create-draft-invoice"]({ ...docBody, precedingSalesVoucherId: "q9" });
+    const call = post.mock.calls[0] as [string, Record<string, unknown>, Record<string, unknown>];
+    expect(call[0]).toBe("/v1/invoices");
+    expect(call[2]).toEqual({ precedingSalesVoucherId: "q9" });
+    expect(call[1].finalize).toBeUndefined(); // finalize stripped from the body
+  });
+
+  it("finalize:true is rejected when the finalize capability is off", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, false), client);
+    await expect(
+      handlers["create-draft-invoice"]({ ...docBody, finalize: true, confirm_finalize: true }),
+    ).rejects.toThrow(/LEXWARE_ENABLE_FINALIZE/);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("finalize:true requires confirm_finalize even when enabled", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client);
+    await expect(handlers["create-draft-invoice"]({ ...docBody, finalize: true })).rejects.toThrow(
+      /confirm_finalize/,
+    );
+  });
+
+  it("finalize:true + confirm + capability POSTs ?finalize=true", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client);
+    const res = (await handlers["create-draft-invoice"]({
+      ...docBody,
+      finalize: true,
+      confirm_finalize: true,
+    })) as { structuredContent: { finalized: boolean } };
+    expect((post.mock.calls[0] as [string, unknown, Record<string, unknown>])[2]).toEqual({ finalize: true });
+    expect(res.structuredContent.finalized).toBe(true);
+  });
+});
+
+describe("render-*-pdf and get-document-file download /file", () => {
+  const mkClient = () =>
+    ({ getBinary: vi.fn(async () => ({ data: Buffer.from("%PDF"), contentType: "application/pdf" })) }) as unknown as LexwareClient;
+
+  it("render-invoice-pdf hits /v1/invoices/{id}/file", async () => {
+    const client = mkClient();
+    const handlers = handlersFor((s, c) => registerDocumentReadTools(s, c, "https://app.test"), client);
+    await handlers["render-invoice-pdf"]({ id: "i9" });
+    expect(client.getBinary).toHaveBeenCalledWith("/v1/invoices/i9/file");
+  });
+
+  it("get-document-file hits /v1/{resourceType}/{id}/file", async () => {
+    const client = mkClient();
+    const handlers = handlersFor((s, c) => registerDocumentReadTools(s, c, "https://app.test"), client);
+    await handlers["get-document-file"]({ resourceType: "credit-notes", id: "c3" });
+    expect(client.getBinary).toHaveBeenCalledWith("/v1/credit-notes/c3/file");
+  });
+});

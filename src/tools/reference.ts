@@ -29,8 +29,9 @@ export function registerReferenceReadTools(server: McpServer, client: LexwareCli
       name: "get-payment",
       description:
         "Get payment information for a voucher/document by its id. NOTE: this is the only payment data the " +
-        "public API exposes — there is no general bank-transaction read/assignment endpoint, and tax returns " +
-        "(e.g. USt-Voranmeldung) are not available via the API, so VAT/§13b reconciliation can't be fully automated.",
+        "public API exposes — there is no general bank-transaction read/assignment endpoint, no DATEV export, " +
+        "and tax returns (e.g. USt-Voranmeldung) are not available via the API, so VAT/§13b reconciliation " +
+        "can't be fully automated.",
       inputSchema: { id: z.string() },
       annotations: RO,
     },

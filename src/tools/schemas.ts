@@ -296,7 +296,8 @@ export const contactUpdateShape = {
   emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
   phoneNumbers: jsonObj(contactPhoneNumbersSchema).optional(),
   archived: jsonBool(z.boolean().optional()).describe(
-    "Set true to archive the contact (e.g. hide a duplicate; lexoffice has no contact-merge API).",
+    "Set true to archive the contact (hide a duplicate). lexoffice has no contact-merge or delete API, and a " +
+      "contact already referenced by documents may not be archivable.",
   ),
   note: z.string().optional(),
 } as const;
