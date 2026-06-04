@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deepMergePatch } from "../src/tools/shared.js";
+import { deepMergePatch, mergeAddresses } from "../src/tools/shared.js";
 
 describe("deepMergePatch (read-modify-write)", () => {
   it("preserves base fields the patch omits", () => {
@@ -35,5 +35,38 @@ describe("deepMergePatch (read-modify-write)", () => {
     const out = deepMergePatch(base, { nested: { y: 2 } });
     expect(base).toEqual({ nested: { x: 1 } });
     expect(out.nested).toEqual({ x: 1, y: 2 });
+  });
+});
+
+describe("mergeAddresses (index-wise contact address merge)", () => {
+  it("merges a partial billing[0] into the existing address, keeping street/zip/city", () => {
+    const current = {
+      billing: [{ street: "Europaplatz 1", zip: "10557", city: "Berlin", countryCode: "DE" }],
+    };
+    const out = mergeAddresses(current, { billing: [{ countryCode: "IE" }] });
+    expect(out.billing).toEqual([
+      { street: "Europaplatz 1", zip: "10557", city: "Berlin", countryCode: "IE" },
+    ]);
+  });
+
+  it("adds a billing address when none exists yet", () => {
+    const out = mergeAddresses({}, { billing: [{ countryCode: "IE" }] });
+    expect(out.billing).toEqual([{ countryCode: "IE" }]);
+  });
+
+  it("preserves shipping and untouched extra entries when only billing[0] is patched", () => {
+    const current = {
+      billing: [
+        { city: "Berlin", countryCode: "DE" },
+        { city: "Munich", countryCode: "DE" },
+      ],
+      shipping: [{ city: "Hamburg", countryCode: "DE" }],
+    };
+    const out = mergeAddresses(current, { billing: [{ countryCode: "IE" }] });
+    expect(out.billing).toEqual([
+      { city: "Berlin", countryCode: "IE" },
+      { city: "Munich", countryCode: "DE" },
+    ]);
+    expect(out.shipping).toEqual([{ city: "Hamburg", countryCode: "DE" }]);
   });
 });

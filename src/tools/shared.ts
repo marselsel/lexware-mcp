@@ -55,3 +55,32 @@ export function deepMergePatch(
   }
   return out;
 }
+
+/**
+ * Merge a contact's address collection (`{ billing: [...], shipping: [...] }`) by
+ * INDEX, deep-merging each address object — unlike {@link deepMergePatch}, which
+ * replaces arrays wholesale. This lets a partial patch (e.g. just `countryCode`)
+ * update the matching existing address instead of wiping its street/zip/city.
+ * lexoffice requires `countryCode` in every address object, so element-wise merge
+ * keeps the existing address valid. Existing entries the patch doesn't reach are
+ * preserved.
+ */
+export function mergeAddresses(current: unknown, patch: unknown): Record<string, unknown> {
+  const cur = isPlainObject(current) ? current : {};
+  const pat = isPlainObject(patch) ? patch : {};
+  const out: Record<string, unknown> = { ...cur };
+  for (const [key, value] of Object.entries(pat)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      const base = Array.isArray(cur[key]) ? (cur[key] as unknown[]) : [];
+      const merged = value.map((entry, i) =>
+        isPlainObject(entry) && isPlainObject(base[i]) ? deepMergePatch(base[i], entry) : entry,
+      );
+      // Keep existing addresses beyond the patch length (e.g. a second billing address).
+      out[key] = base.length > value.length ? merged.concat(base.slice(value.length)) : merged;
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}

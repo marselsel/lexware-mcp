@@ -98,7 +98,7 @@ describe("update-contact (read-modify-write)", () => {
       id: "c1",
       version: 4,
       company: { vatRegistrationId: "IE3336483DH" },
-      addresses: { billing: [{ street: "Europaplatz 1", zip: "10557", city: "Berlin", countryCode: "IE" }] },
+      addresses: { billing: [{ countryCode: "IE" }] }, // ONLY the country changes
     });
 
     expect(get).toHaveBeenCalledWith("/v1/contacts/c1");
@@ -106,8 +106,14 @@ describe("update-contact (read-modify-write)", () => {
     expect(body.emailAddresses).toEqual({ business: ["billing@db.de"] }); // preserved
     expect(body.company).toEqual({ name: "Deutsche Bahn AG", vatRegistrationId: "IE3336483DH" }); // merged, name kept
     expect(body.roles).toEqual({ vendor: {} }); // preserved
-    const addresses = body.addresses as { billing: Array<{ countryCode: string }> };
-    expect(addresses.billing[0].countryCode).toBe("IE"); // updated
+    const addresses = body.addresses as { billing: Array<Record<string, string>> };
+    // street/zip/city preserved, only countryCode updated (element-wise address merge)
+    expect(addresses.billing[0]).toEqual({
+      street: "Europaplatz 1",
+      zip: "10557",
+      city: "Berlin",
+      countryCode: "IE",
+    });
     expect(body.version).toBe(4);
   });
 });
