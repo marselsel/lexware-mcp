@@ -11,6 +11,7 @@ const READ_TOOLS = [
   "list-articles",
   "get-article",
   "get-voucherlist",
+  "summarize-vouchers",
   "get-invoice",
   "get-quotation",
   "get-credit-note",
