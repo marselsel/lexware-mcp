@@ -96,6 +96,20 @@ export const shippingConditionsSchema = z
   })
   .passthrough();
 
+export const paymentConditionsSchema = z
+  .object({
+    paymentTermLabel: z
+      .string()
+      .optional()
+      .describe('Payment-term text on the document, e.g. "Zahlbar innerhalb von 14 Tagen ohne Abzug".'),
+    paymentTermDuration: z
+      .number()
+      .int()
+      .optional()
+      .describe("Days until the invoice is due (drives the Fälligkeitsdatum), e.g. 14. 0 = due immediately."),
+  })
+  .passthrough();
+
 /** Fields common to every voucher document; specific shapes spread this. */
 const baseDocumentShape = {
   voucherDate: z.string().describe("ISO date/dateTime of the document."),
@@ -108,6 +122,12 @@ const baseDocumentShape = {
       .describe("Must include the currency (EUR)."),
   ),
   taxConditions: jsonObj(taxConditionsSchema),
+  paymentConditions: jsonObj(paymentConditionsSchema)
+    .optional()
+    .describe(
+      "Payment terms (paymentTermLabel + paymentTermDuration in days). Set this at creation — the Lexware " +
+        "API has no update endpoint for invoices/quotations/etc., so a draft cannot be patched afterwards.",
+    ),
   title: z.string().optional(),
   introduction: z.string().optional(),
   remark: z.string().optional(),

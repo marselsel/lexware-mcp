@@ -55,17 +55,11 @@ const DRAFT_TOOLS = [
   "create-draft-delivery-note",
   "create-draft-dunning",
   "create-event-subscription",
-  // expansion: bookkeeping vouchers + receipts, file upload, document draft-updates
+  // expansion: bookkeeping vouchers + receipts, file upload
   "create-voucher",
   "update-voucher",
   "upload-voucher-file",
   "upload-file",
-  "update-draft-invoice",
-  "update-draft-quotation",
-  "update-draft-credit-note",
-  "update-draft-order-confirmation",
-  "update-draft-delivery-note",
-  "update-draft-dunning",
 ];
 const FINALIZE_TOOLS = [
   "create-finalized-invoice",

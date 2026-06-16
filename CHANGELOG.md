@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2]
+
+### Changed
+- Advertised MCP server version bumped to **0.1.2** — the tool surface shrank (65 → 59) after
+  removing the non-functional `update-draft-*` tools; the version change also nudges MCP clients to
+  drop the stale tools from a cached tool list.
+
+### Added
+- `paymentConditions` on every `create-draft-*` / `create-finalized-*` document body
+  (`paymentTermLabel` + `paymentTermDuration` in days). The payment term can now be set at
+  creation; previously the field was silently dropped (it was not in the input schema), so
+  invoices fell back to the account default ("Zahlbar sofort, rein netto").
+
+### Removed
+- `update-draft-<type>` for invoices/quotations/credit-notes/order-confirmations/delivery-notes/
+  dunnings. These always failed with **404 Not Found**: the Lexware Office REST API exposes only
+  GET and POST for those document types — there is no PUT/update endpoint (unlike
+  contacts/articles/vouchers, whose update tools remain). A draft document cannot be patched after
+  creation; set all fields at creation via `create-draft-*`, or recreate the draft and delete the
+  old one in the web app.
+
 ## [0.1.1]
 
 ### Added

@@ -12,9 +12,8 @@ import {
   pageParam,
   quotationInputShape,
   sizeParam,
-  versionParam,
 } from "./schemas.js";
-import { LOCAL_RO, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
+import { LOCAL_RO, RO, WRITE, pagedResult, text } from "./shared.js";
 
 /** A Lexware voucher-document type and how to create it. */
 interface DocType {
@@ -407,46 +406,13 @@ export function registerDocumentDraftTools(
     );
   }
 
-  // update-draft-<doctype>: edit an existing draft document (read-modify-write).
-  for (const doc of DOC_TYPES) {
-    if (!doc.schema) continue;
-    const updateShape = optionalShape(doc.schema);
-    server.registerTool(
-      {
-        name: `update-draft-${doc.key}`,
-        description:
-          `Update an existing DRAFT ${doc.label} (read-modify-write: the current document is fetched and your ` +
-          `fields are merged over it, so untouched fields like title/introduction aren't wiped). Send only what ` +
-          `you change. If you send lineItems it REPLACES the whole list — include every line. Pass \`version\` for ` +
-          `optimistic locking (omit to use the latest). Only drafts are editable; a finalized document cannot be changed.`,
-        inputSchema: {
-          id: z.string(),
-          version: versionParam(`get-${doc.key}`),
-          ...updateShape,
-        },
-        annotations: WRITE,
-      },
-      async ({ id, version, ...fields }) => {
-        // Read-modify-write: load the current draft and merge the caller's fields over it.
-        const current = await client.get<Record<string, unknown>>(
-          `/v1/${doc.path}/${encodeURIComponent(id)}`,
-        );
-        const body = deepMergePatch(current, {
-          ...fields,
-          version: version ?? (current.version as number),
-        });
-        const updated = await client.request<{ id: string; version: number }>(
-          "PUT",
-          `/v1/${doc.path}/${encodeURIComponent(id)}`,
-          { body, idempotent: false },
-        );
-        return {
-          structuredContent: { ...updated, finalized: false },
-          content: text(`Updated DRAFT ${doc.label} ${id} (now version ${updated.version}).`),
-        };
-      },
-    );
-  }
+  // NOTE: there is deliberately no update-draft-<doctype> tool. The Lexware Office
+  // REST API exposes only GET and POST for invoices/quotations/credit-notes/
+  // order-confirmations/delivery-notes/dunnings — no PUT — so a draft document
+  // cannot be patched after creation (a PUT returns 404). Set every field (incl.
+  // paymentConditions) at creation via create-draft-*; to change a draft, recreate
+  // it and delete the old one in the web app. (Contacts/articles/vouchers DO have
+  // PUT and keep their own update tools.)
 }
 
 /** Finalizing / legally-binding tools for every finalizable document type. Finalize tier. */
