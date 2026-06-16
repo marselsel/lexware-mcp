@@ -1,9 +1,11 @@
 import type { McpServer } from "skybridge/server";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { LexwareClient } from "../src/lexware/client.js";
 import { registerArticleWriteTools } from "../src/tools/articles.js";
 import { registerContactDraftTools } from "../src/tools/contacts.js";
 import { registerDocumentDraftTools, registerDocumentReadTools } from "../src/tools/documents.js";
+import { invoiceInputShape } from "../src/tools/schemas.js";
 import { registerVoucherWriteTools } from "../src/tools/vouchers.js";
 
 type Handler = (input: Record<string, unknown>) => Promise<unknown>;
@@ -153,40 +155,44 @@ describe("update-article (read-modify-write)", () => {
   });
 });
 
-describe("update-draft-<type> (read-modify-write)", () => {
-  it("GETs first, then PUTs the merged invoice, preserving lineItems/address when only title changes", async () => {
-    const current = {
-      id: "i1",
-      organizationId: "org",
-      version: 1,
-      voucherDate: "2026-06-01T00:00:00.000+02:00",
-      address: { contactId: "c1", name: "Acme" },
-      lineItems: [
-        { type: "custom", name: "Item", quantity: 1, unitPrice: { currency: "EUR", netAmount: 100 } },
-      ],
-      totalPrice: { currency: "EUR", totalNetAmount: 100 },
-      taxConditions: { taxType: "net" },
-      title: "Invoice",
-      introduction: "Intro",
-    };
-    const request = vi.fn(async () => ({ id: "i1", version: 2 }));
-    const get = vi.fn(async () => current);
-    const client = { get, request } as unknown as LexwareClient;
+describe("invoice draft: paymentConditions set at creation (the API has no PUT/update for invoices)", () => {
+  const sample = {
+    voucherDate: "2026-06-16T00:00:00.000+02:00",
+    address: { contactId: "c1" },
+    lineItems: [
+      { type: "custom", name: "Item", quantity: 1, unitPrice: { currency: "EUR", netAmount: 100 } },
+    ],
+    totalPrice: { currency: "EUR" },
+    taxConditions: { taxType: "net" },
+    shippingConditions: { shippingType: "service" },
+    paymentConditions: {
+      paymentTermLabel: "Zahlbar innerhalb von 14 Tagen ohne Abzug",
+      paymentTermDuration: 14,
+    },
+  };
 
-    await handlersFor(registerDocumentDraftTools, client)["update-draft-invoice"]({
-      id: "i1",
-      version: 1,
-      title: "Invoice (rev 2)",
+  it("the invoice input schema retains paymentConditions instead of stripping it", () => {
+    const parsed = z.object(invoiceInputShape).parse(sample);
+    expect(parsed.paymentConditions).toEqual({
+      paymentTermLabel: "Zahlbar innerhalb von 14 Tagen ohne Abzug",
+      paymentTermDuration: 14,
     });
+  });
 
-    expect(get).toHaveBeenCalledWith("/v1/invoices/i1");
-    const body = putBody(request);
-    expect(body.lineItems).toEqual(current.lineItems); // preserved
-    expect(body.address).toEqual({ contactId: "c1", name: "Acme" }); // preserved
-    expect(body.taxConditions).toEqual({ taxType: "net" }); // preserved
-    expect(body.introduction).toBe("Intro"); // preserved
-    expect(body.title).toBe("Invoice (rev 2)"); // updated
-    expect(body.version).toBe(1);
+  it("create-draft-invoice forwards paymentConditions in the POST body to /v1/invoices", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+
+    await handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client)["create-draft-invoice"](
+      sample,
+    );
+
+    const call = post.mock.calls[0] as [string, Record<string, unknown>, unknown];
+    expect(call[0]).toBe("/v1/invoices");
+    expect(call[1].paymentConditions).toEqual({
+      paymentTermLabel: "Zahlbar innerhalb von 14 Tagen ohne Abzug",
+      paymentTermDuration: 14,
+    });
   });
 });
 
