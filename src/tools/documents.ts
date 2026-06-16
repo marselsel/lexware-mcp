@@ -87,6 +87,27 @@ const VOUCHERTYPE_TO_PATH: Record<string, string> = {
   voucher: "vouchers",
 };
 
+/** Dimensions `summarize-vouchers` can group totals by. */
+const SUMMARY_GROUP_BY = ["voucherType", "voucherStatus", "month", "contact", "currency", "none"] as const;
+
+/** Bucket key for a voucherlist row under the chosen grouping dimension. */
+function summaryGroupKey(row: VoucherlistEntry, groupBy: (typeof SUMMARY_GROUP_BY)[number]): string {
+  switch (groupBy) {
+    case "voucherStatus":
+      return row.voucherStatus || "(unknown)";
+    case "month":
+      return row.voucherDate ? row.voucherDate.slice(0, 7) : "(no date)"; // YYYY-MM
+    case "contact":
+      return row.contactName || "(no contact)";
+    case "currency":
+      return row.currency || "(no currency)";
+    case "none":
+      return "all";
+    default:
+      return row.voucherType || "(unknown)";
+  }
+}
+
 /** Read tools for financial documents. Always registered. */
 export function registerDocumentReadTools(
   server: McpServer,
@@ -122,6 +143,132 @@ export function registerDocumentReadTools(
         size,
       });
       return pagedResult(result, "voucher(s)");
+    },
+  );
+
+  server.registerTool(
+    {
+      name: "summarize-vouchers",
+      description:
+        "Aggregate the voucherlist over a date range WITHOUT returning every row: server-side paginates all " +
+        "matches and returns counts plus summed gross/open amounts, grouped by a chosen dimension. Use this " +
+        "for totals (e.g. 'gross sales invoices in Q2') instead of get-voucherlist, which can blow the token " +
+        "limit on large ranges. Amounts are GROSS (the voucherlist's totalAmount/openAmount) in the document " +
+        "currency — the net/VAT split is not in the voucherlist, so this does not break out USt. " +
+        "voucherType/voucherStatus default to 'any'.",
+      inputSchema: {
+        voucherType: z.enum(VOUCHER_TYPES).default("any"),
+        voucherStatus: z.enum(VOUCHER_STATUSES).default("any"),
+        contactId: z.string().optional(),
+        voucherDateFrom: z.string().optional().describe("ISO date lower bound."),
+        voucherDateTo: z.string().optional().describe("ISO date upper bound."),
+        archived: jsonBool(z.boolean().optional()),
+        groupBy: z
+          .enum(SUMMARY_GROUP_BY)
+          .default("voucherType")
+          .describe("Dimension to group totals by. 'month' buckets by voucherDate (YYYY-MM); 'none' = one total."),
+        maxPages: jsonNum(z.number().int().min(1).max(200).default(40)).describe(
+          "Safety cap on pages scanned (250 rows/page). If hit, the result is flagged truncated.",
+        ),
+      },
+      annotations: RO,
+    },
+    async ({
+      voucherType,
+      voucherStatus,
+      contactId,
+      voucherDateFrom,
+      voucherDateTo,
+      archived,
+      groupBy,
+      maxPages,
+    }) => {
+      const SIZE = 250;
+      const groups = new Map<
+        string,
+        { count: number; sumTotalAmount: number; sumOpenAmount: number; currencies: Set<string> }
+      >();
+      let scanned = 0;
+      let totalElements = 0;
+      let page = 0;
+      let truncated = false;
+      // Walk every page; we only keep aggregates, so the response size is bounded
+      // regardless of how many vouchers match.
+      for (;;) {
+        const res = await client.get<Paged<VoucherlistEntry>>("/v1/voucherlist", {
+          voucherType,
+          voucherStatus,
+          contactId,
+          voucherDateFrom,
+          voucherDateTo,
+          archived,
+          page,
+          size: SIZE,
+        });
+        totalElements = res.totalElements;
+        for (const row of res.content) {
+          scanned++;
+          const key = summaryGroupKey(row, groupBy);
+          const g = groups.get(key) ?? {
+            count: 0,
+            sumTotalAmount: 0,
+            sumOpenAmount: 0,
+            currencies: new Set<string>(),
+          };
+          g.count++;
+          g.sumTotalAmount += row.totalAmount ?? 0;
+          g.sumOpenAmount += row.openAmount ?? 0;
+          if (row.currency) g.currencies.add(row.currency);
+          groups.set(key, g);
+        }
+        if (res.last) break;
+        page++;
+        if (page >= maxPages) {
+          truncated = true;
+          break;
+        }
+      }
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      const currencyOf = (set: Set<string>) =>
+        set.size === 1 ? [...set][0] : set.size === 0 ? undefined : "mixed";
+      const groupList = [...groups.entries()]
+        .map(([key, g]) => ({
+          key,
+          count: g.count,
+          sumTotalAmount: round2(g.sumTotalAmount),
+          sumOpenAmount: round2(g.sumOpenAmount),
+          currency: currencyOf(g.currencies),
+        }))
+        .sort((a, b) => b.sumTotalAmount - a.sumTotalAmount);
+      const allCurrencies = new Set<string>(
+        [...groups.values()].flatMap((g) => [...g.currencies]),
+      );
+      const currency = currencyOf(allCurrencies);
+      const grandTotal = round2(groupList.reduce((s, g) => s + g.sumTotalAmount, 0));
+      const grandOpen = round2(groupList.reduce((s, g) => s + g.sumOpenAmount, 0));
+      return {
+        structuredContent: {
+          filters: {
+            voucherType,
+            voucherStatus,
+            contactId,
+            voucherDateFrom,
+            voucherDateTo,
+            archived,
+            groupBy,
+          },
+          scanned,
+          totalElements,
+          pagesScanned: page + 1,
+          truncated,
+          grandTotal: { sumTotalAmount: grandTotal, sumOpenAmount: grandOpen, currency },
+          groups: groupList,
+        },
+        content: text(
+          `Summarized ${scanned} voucher(s)${truncated ? ` (TRUNCATED at ${maxPages} pages × ${SIZE})` : ""}; ` +
+            `gross total ${currency ?? ""} ${grandTotal} across ${groupList.length} ${groupBy} group(s).`,
+        ),
+      };
     },
   );
 

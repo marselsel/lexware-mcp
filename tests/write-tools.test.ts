@@ -352,3 +352,57 @@ describe("render-*-pdf and get-document-file download /file", () => {
     expect(client.getBinary).toHaveBeenCalledWith("/v1/credit-notes/c3/file");
   });
 });
+
+describe("summarize-vouchers (server-side aggregation, no row dump)", () => {
+  const sumHandler = (get: ReturnType<typeof vi.fn>) =>
+    handlersFor(
+      (s, c) => registerDocumentReadTools(s, c, "https://app.test"),
+      { get } as unknown as LexwareClient,
+    )["summarize-vouchers"];
+
+  it("walks every page and sums gross/open grouped by voucherType (sorted desc)", async () => {
+    const pages: Record<number, unknown> = {
+      0: {
+        content: [
+          { id: "1", voucherType: "salesinvoice", voucherStatus: "open", voucherDate: "2026-04-01", totalAmount: 100, openAmount: 100, currency: "EUR" },
+          { id: "2", voucherType: "salesinvoice", voucherStatus: "paid", voucherDate: "2026-05-01", totalAmount: 200, openAmount: 0, currency: "EUR" },
+        ],
+        first: true, last: false, number: 0, numberOfElements: 2, size: 250, totalPages: 2, totalElements: 3,
+      },
+      1: {
+        content: [
+          { id: "3", voucherType: "purchaseinvoice", voucherStatus: "paid", voucherDate: "2026-05-15", totalAmount: 50, openAmount: 0, currency: "EUR" },
+        ],
+        first: false, last: true, number: 1, numberOfElements: 1, size: 250, totalPages: 2, totalElements: 3,
+      },
+    };
+    const get = vi.fn(async (_p: string, q: { page: number }) => pages[q.page]);
+    const res = (await sumHandler(get)({
+      voucherType: "any", voucherStatus: "any", groupBy: "voucherType", maxPages: 40,
+    })) as { structuredContent: Record<string, any> };
+    const sc = res.structuredContent;
+
+    expect(get).toHaveBeenCalledTimes(2); // both pages walked
+    expect(sc.scanned).toBe(3);
+    expect(sc.truncated).toBe(false);
+    expect(sc.grandTotal).toEqual({ sumTotalAmount: 350, sumOpenAmount: 100, currency: "EUR" });
+    const byType = Object.fromEntries(sc.groups.map((g: any) => [g.key, g]));
+    expect(byType.salesinvoice).toEqual({ key: "salesinvoice", count: 2, sumTotalAmount: 300, sumOpenAmount: 100, currency: "EUR" });
+    expect(byType.purchaseinvoice.sumTotalAmount).toBe(50);
+    expect(sc.groups[0].key).toBe("salesinvoice"); // sorted by gross desc
+  });
+
+  it("flags truncated when maxPages is hit before the last page", async () => {
+    const page = {
+      content: [{ id: "1", voucherType: "salesinvoice", voucherStatus: "open", totalAmount: 10, openAmount: 10, currency: "EUR" }],
+      first: true, last: false, number: 0, numberOfElements: 1, size: 250, totalPages: 5, totalElements: 5,
+    };
+    const get = vi.fn(async () => page);
+    const res = (await sumHandler(get)({ groupBy: "none", maxPages: 1 })) as {
+      structuredContent: Record<string, any>;
+    };
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(res.structuredContent.truncated).toBe(true);
+    expect(res.structuredContent.groups[0].key).toBe("all");
+  });
+});

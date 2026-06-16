@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3]
+
+### Added
+- `summarize-vouchers` (read tier) — server-side aggregation over the voucherlist for a date range:
+  paginates all matches and returns counts plus summed **gross** (`totalAmount`) and **open**
+  (`openAmount`) amounts, grouped by `voucherType` / `voucherStatus` / `month` / `contact` / `currency` /
+  `none`. Avoids blowing the token limit on large ranges (no per-row dump). The net/VAT split is not in the
+  voucherlist, so this reports gross only. A `maxPages` cap (default 40 × 250) flags `truncated` if hit.
+
+### Changed
+- Advertised MCP server version bumped to **0.1.3** so clients pick up the new `summarize-vouchers` tool.
+
 ## [0.1.2]
 
 ### Changed
