@@ -1,3 +1,5 @@
+import type { LexwareClient } from "../lexware/client.js";
+import { isNotFound } from "../lexware/errors.js";
 import type { Paged } from "../lexware/types.js";
 
 /** Default page size for list tools. */
@@ -17,12 +19,95 @@ export function text(message: string): [{ type: "text"; text: string }] {
 
 /** Standard result for a paged list tool: the Paged envelope + a one-line summary. */
 export function pagedResult<T>(result: Paged<T>, noun: string) {
+  // An empty result set has totalPages 0; render "page 1/1" rather than the
+  // self-contradictory "page 1/0".
+  const totalPages = Math.max(result.totalPages, 1);
   return {
     structuredContent: result,
     content: text(
-      `Found ${result.totalElements} ${noun}; showing page ${result.number + 1}/${result.totalPages}.`,
+      `Found ${result.totalElements} ${noun}; showing page ${result.number + 1}/${totalPages}.`,
     ),
   };
+}
+
+/**
+ * MCP embedded-resource content block for a binary payload. Inlined (rather than
+ * importing Skybridge's `embeddedResource`) so the tools layer stays independent
+ * of the Skybridge runtime, per AGENTS.md.
+ */
+function embeddedResourceBlock(uri: string, mimeType: string, data: Buffer) {
+  return {
+    type: "resource" as const,
+    resource: { uri, mimeType, blob: data.toString("base64") },
+  };
+}
+
+/**
+ * Standard result for a binary-download tool: structured metadata, a one-line
+ * summary, and the file inline as an embedded resource. Shared by every
+ * PDF/file download tool so the envelope shape can't drift across them.
+ */
+export function binaryResult(opts: {
+  uri: string;
+  data: Buffer;
+  contentType: string;
+  structuredContent: Record<string, unknown>;
+  message: string;
+}) {
+  return {
+    structuredContent: opts.structuredContent,
+    content: [...text(opts.message), embeddedResourceBlock(opts.uri, opts.contentType, opts.data)],
+  };
+}
+
+/**
+ * Decode a base64 string to bytes, rejecting malformed input instead of silently
+ * producing garbage. `Buffer.from(s, "base64")` skips invalid characters, so a
+ * value like a leftover `data:...;base64,` prefix or a truncated payload would
+ * otherwise upload corrupt bytes and report success. Accepts standard and
+ * URL-safe alphabets and tolerates a data-URI prefix / embedded whitespace.
+ */
+export function decodeBase64Strict(input: string, field = "file"): Buffer {
+  let s = input.trim();
+  if (s.startsWith("data:")) {
+    const comma = s.indexOf(",");
+    if (comma >= 0) s = s.slice(comma + 1);
+  }
+  s = s.replace(/\s+/g, "");
+  if (!s) throw new Error(`${field}: base64 content is empty.`);
+  // Validate the alphabet (standard or URL-safe) and length up front — Buffer.from
+  // silently drops invalid characters, so a value like a leftover data-URI prefix or
+  // a truncated payload would otherwise decode to garbage. A charset+length check
+  // rejects that without re-encoding the whole (multi-MB) payload, and unlike a
+  // decode/re-encode round-trip it does not reject non-canonical padding that every
+  // standard decoder accepts. Base64 length is never ≡ 1 (mod 4).
+  const body = s.replace(/=+$/, "");
+  if (!/^[A-Za-z0-9+/_-]*$/.test(body) || body.length % 4 === 1) {
+    throw new Error(
+      `${field}: invalid base64 (non-base64 characters or wrong length). Pass the raw base64 without a data-URI prefix.`,
+    );
+  }
+  return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+/**
+ * DELETE a resource idempotently. A 404 — the resource is already gone, e.g. a
+ * retried DELETE whose first attempt already succeeded, or an id that never
+ * existed — is treated as success rather than a false failure. Returns whether the
+ * resource was actually found, so callers can distinguish "deleted it" from
+ * "it was already absent".
+ */
+export async function deleteIdempotent(
+  client: LexwareClient,
+  path: string,
+): Promise<{ deleted: true; alreadyAbsent: boolean }> {
+  try {
+    await client.request<unknown>("DELETE", path, { idempotent: true });
+    return { deleted: true, alreadyAbsent: false };
+  } catch (e) {
+    if (isNotFound(e)) return { deleted: true, alreadyAbsent: true };
+    throw e;
+  }
 }
 
 /** True for a non-null, non-array object. */

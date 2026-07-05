@@ -18,6 +18,9 @@ function settings(overrides: Partial<OAuthSettings> = {}): OAuthSettings {
     verifyAudience: true,
     allowedEmailDomains: [],
     userinfoUrl: `${ISSUER}/oauth2/userinfo`,
+    authorizationEndpoint: `${ISSUER}/oauth2/authorize`,
+    tokenEndpoint: `${ISSUER}/oauth2/token`,
+    registrationEndpoint: `${ISSUER}/oauth2/register`,
     ...overrides,
   };
 }

@@ -46,6 +46,12 @@ export type AuthConfig =
       allowedEmailDomains: string[];
       /** OIDC userinfo endpoint, used to fetch email when it isn't a token claim. */
       userinfoUrl: string;
+      /** Authorization endpoint advertised in AS metadata (overridable for non-WorkOS IdPs). */
+      authorizationEndpoint: string;
+      /** Token endpoint advertised in AS metadata (overridable for non-WorkOS IdPs). */
+      tokenEndpoint: string;
+      /** Dynamic client registration endpoint advertised in AS metadata. */
+      registrationEndpoint: string;
     }
   | { mode: "static"; token: string }
   | { mode: "none" };
@@ -60,6 +66,8 @@ export interface Config {
   port: number;
   debugLogging: boolean;
   capabilities: Capabilities;
+  /** Non-fatal configuration notices to log at startup (e.g. a flag that was overridden). */
+  warnings: string[];
 }
 
 const DEFAULT_BASE_URL = "https://api.lexware.io";
@@ -163,7 +171,36 @@ function resolveAuth(env: NodeJS.ProcessEnv): AuthConfig {
     );
     const jwksUrl = normalizeUrl(env.OAUTH_JWKS_URL, `${issuerBase}/oauth2/jwks`, "OAUTH_JWKS_URL");
     const verifyAudience = parseBool(env.OAUTH_VERIFY_AUDIENCE, true);
-    return { mode: "oauth", issuer, jwksUrl, resource, verifyAudience, allowedEmailDomains, userinfoUrl };
+    // Endpoints default to the WorkOS-AuthKit layout but are overridable so other
+    // IdPs (Auth0: /authorize + /oauth/token; Keycloak; Clerk) advertise correctly
+    // in the /.well-known/oauth-authorization-server metadata.
+    const authorizationEndpoint = normalizeUrl(
+      env.OAUTH_AUTHORIZATION_ENDPOINT,
+      `${issuerBase}/oauth2/authorize`,
+      "OAUTH_AUTHORIZATION_ENDPOINT",
+    );
+    const tokenEndpoint = normalizeUrl(
+      env.OAUTH_TOKEN_ENDPOINT,
+      `${issuerBase}/oauth2/token`,
+      "OAUTH_TOKEN_ENDPOINT",
+    );
+    const registrationEndpoint = normalizeUrl(
+      env.OAUTH_REGISTRATION_ENDPOINT,
+      `${issuerBase}/oauth2/register`,
+      "OAUTH_REGISTRATION_ENDPOINT",
+    );
+    return {
+      mode: "oauth",
+      issuer,
+      jwksUrl,
+      resource,
+      verifyAudience,
+      allowedEmailDomains,
+      userinfoUrl,
+      authorizationEndpoint,
+      tokenEndpoint,
+      registrationEndpoint,
+    };
   }
 
   // 2) Static bearer token.
@@ -205,8 +242,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const readOnly = parseBool(env.LEXWARE_READ_ONLY, false);
   // READ_ONLY is a hard override: it wins over the individual enable flags.
-  const enableDrafts = readOnly ? false : parseBool(env.LEXWARE_ENABLE_DRAFTS, true);
   const enableFinalize = readOnly ? false : parseBool(env.LEXWARE_ENABLE_FINALIZE, false);
+  // Finalize implies drafts: the finalize tier issues legally-binding versions of
+  // draft documents, so enabling it without drafts would expose ONLY the
+  // irreversible create-finalized-* tools (no safe draft path). Never allow that.
+  const draftsRequested = parseBool(env.LEXWARE_ENABLE_DRAFTS, true);
+  const enableDrafts = readOnly ? false : draftsRequested || enableFinalize;
+
+  const warnings: string[] = [];
+  if (!readOnly && !draftsRequested && enableFinalize) {
+    warnings.push(
+      "LEXWARE_ENABLE_DRAFTS=false was overridden to true because LEXWARE_ENABLE_FINALIZE=true — the " +
+        "finalize tier issues binding versions of draft documents and cannot run without the drafts tier.",
+    );
+  }
 
   return {
     lexwareApiKey,
@@ -220,6 +269,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: parsePort(env.PORT),
     debugLogging: parseBool(env.LEXWARE_DEBUG_LOGGING, false),
     capabilities: { read: true, drafts: enableDrafts, finalize: enableFinalize },
+    warnings,
   };
 }
 

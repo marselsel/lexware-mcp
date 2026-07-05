@@ -2,9 +2,15 @@ import type { McpServer } from "skybridge/server";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { LexwareClient } from "../src/lexware/client.js";
-import { registerArticleWriteTools } from "../src/tools/articles.js";
+import { LexwareApiError } from "../src/lexware/errors.js";
+import { registerArticleDeleteTools, registerArticleWriteTools } from "../src/tools/articles.js";
+import { registerEventSubscriptionDeleteTools } from "../src/tools/event-subscriptions.js";
 import { registerContactDraftTools } from "../src/tools/contacts.js";
-import { registerDocumentDraftTools, registerDocumentReadTools } from "../src/tools/documents.js";
+import {
+  registerDocumentDraftTools,
+  registerDocumentFinalizeTools,
+  registerDocumentReadTools,
+} from "../src/tools/documents.js";
 import { invoiceInputShape } from "../src/tools/schemas.js";
 import { registerVoucherWriteTools } from "../src/tools/vouchers.js";
 
@@ -183,9 +189,7 @@ describe("invoice draft: paymentConditions set at creation (the API has no PUT/u
     const post = vi.fn(async () => ({ id: "i1" }));
     const client = { post } as unknown as LexwareClient;
 
-    await handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client)["create-draft-invoice"](
-      sample,
-    );
+    await handlersFor(registerDocumentDraftTools, client)["create-draft-invoice"](sample);
 
     const call = post.mock.calls[0] as [string, Record<string, unknown>, unknown];
     expect(call[0]).toBe("/v1/invoices");
@@ -213,6 +217,27 @@ describe("update-voucher contact + status handling", () => {
     expect(body.contactId).toBe("contact-9");
     expect(body.contactName).toBeUndefined();
     expect(body.useCollectiveContact).toBe(false);
+    expect(body.files).toEqual(["f1"]); // RMW still preserves the receipt
+  });
+
+  it("A2: setting a one-off contactName drops the contactId carried over from the current voucher", async () => {
+    const current = {
+      id: "v1",
+      contactId: "contact-9",
+      voucherStatus: "open",
+      files: ["f1"],
+      version: 1,
+    };
+    const request = vi.fn(async () => ({ id: "v1", version: 2 }));
+    const client = { get: vi.fn(async () => current), request } as unknown as LexwareClient;
+    await handlersFor(registerVoucherWriteTools, client)["update-voucher"]({
+      id: "v1",
+      contactName: "Sammellieferant",
+    });
+    const body = putBody(request);
+    expect(body.contactName).toBe("Sammellieferant");
+    expect(body.contactId).toBeUndefined(); // inherited id cleared so the two don't 406
+    expect(body.useCollectiveContact).toBe(true); // one-off name books to the collective contact
     expect(body.files).toEqual(["f1"]); // RMW still preserves the receipt
   });
 
@@ -261,6 +286,9 @@ describe("get-document dispatch + get-voucher-file", () => {
     expect(get).toHaveBeenCalledWith("/v1/vouchers/x");
     await handlers["get-document"]({ id: "y", voucherType: "quotation" });
     expect(get).toHaveBeenCalledWith("/v1/quotations/y");
+    // recurringtemplate is a real voucherlist type and must dispatch, not throw.
+    await handlers["get-document"]({ id: "r", voucherType: "recurringtemplate" });
+    expect(get).toHaveBeenCalledWith("/v1/recurring-templates/r");
     await expect(handlers["get-document"]({ id: "z", voucherType: "bogus" })).rejects.toThrow(
       /Unknown voucherType/,
     );
@@ -289,48 +317,130 @@ const docBody = {
   shippingConditions: { shippingType: "none" },
 };
 
-describe("create-draft finalize gating + precedingSalesVoucherId", () => {
-  it("creates a draft and passes precedingSalesVoucherId as a query", async () => {
+describe("create-draft: body forwarding + precedingSalesVoucherId (no finalize flag)", () => {
+  it("creates a draft and passes precedingSalesVoucherId as a query; never finalizes", async () => {
     const post = vi.fn(async () => ({ id: "i1" }));
     const client = { post } as unknown as LexwareClient;
-    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client);
-    await handlers["create-draft-invoice"]({ ...docBody, precedingSalesVoucherId: "q9" });
-    const call = post.mock.calls[0] as [string, Record<string, unknown>, Record<string, unknown>];
-    expect(call[0]).toBe("/v1/invoices");
-    expect(call[2]).toEqual({ precedingSalesVoucherId: "q9" });
-    expect(call[1].finalize).toBeUndefined(); // finalize stripped from the body
-  });
-
-  it("finalize:true is rejected when the finalize capability is off", async () => {
-    const post = vi.fn(async () => ({ id: "i1" }));
-    const client = { post } as unknown as LexwareClient;
-    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, false), client);
-    await expect(
-      handlers["create-draft-invoice"]({ ...docBody, finalize: true, confirm_finalize: true }),
-    ).rejects.toThrow(/LEXWARE_ENABLE_FINALIZE/);
-    expect(post).not.toHaveBeenCalled();
-  });
-
-  it("finalize:true requires confirm_finalize even when enabled", async () => {
-    const post = vi.fn(async () => ({ id: "i1" }));
-    const client = { post } as unknown as LexwareClient;
-    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client);
-    await expect(handlers["create-draft-invoice"]({ ...docBody, finalize: true })).rejects.toThrow(
-      /confirm_finalize/,
-    );
-  });
-
-  it("finalize:true + confirm + capability POSTs ?finalize=true", async () => {
-    const post = vi.fn(async () => ({ id: "i1" }));
-    const client = { post } as unknown as LexwareClient;
-    const handlers = handlersFor((s, c) => registerDocumentDraftTools(s, c, true), client);
+    const handlers = handlersFor(registerDocumentDraftTools, client);
     const res = (await handlers["create-draft-invoice"]({
       ...docBody,
-      finalize: true,
+      precedingSalesVoucherId: "q9",
+    })) as { structuredContent: { finalized: boolean } };
+    const call = post.mock.calls[0] as [string, Record<string, unknown>, Record<string, unknown>];
+    expect(call[0]).toBe("/v1/invoices");
+    expect(call[2]).toEqual({ precedingSalesVoucherId: "q9" }); // no finalize in the query
+    expect(res.structuredContent.finalized).toBe(false);
+  });
+
+  it("merges additionalFields into the body (top-level escape hatch for unmodeled fields)", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor(registerDocumentDraftTools, client);
+    await handlers["create-draft-invoice"]({
+      ...docBody,
+      additionalFields: { xRechnung: { buyerReference: "04011000-12345-06" } },
+    });
+    const body = (post.mock.calls[0] as [string, Record<string, unknown>, unknown])[1];
+    expect(body.xRechnung).toEqual({ buyerReference: "04011000-12345-06" }); // merged in
+    expect(body.additionalFields).toBeUndefined(); // not forwarded as a literal key
+  });
+
+  it("strips reserved control keys (finalize) smuggled via additionalFields", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor(registerDocumentDraftTools, client);
+    await handlers["create-draft-invoice"]({
+      ...docBody,
+      additionalFields: { finalize: true, xRechnung: { buyerReference: "x" } },
+    });
+    const call = post.mock.calls[0] as [string, Record<string, unknown>, Record<string, unknown>];
+    expect(call[1].finalize).toBeUndefined(); // reserved key not smuggled into the body
+    expect(call[1].xRechnung).toEqual({ buyerReference: "x" }); // legitimate extra kept
+    expect(call[2]).toEqual({}); // and never reaches the query either
+  });
+
+  it("rejects a stale finalize=true on a draft tool with a pointer to create-finalized-*", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor(registerDocumentDraftTools, client);
+    await expect(
+      handlers["create-draft-invoice"]({ ...docBody, finalize: true, confirm_finalize: true }),
+    ).rejects.toThrow(/create-finalized-invoice/);
+    expect(post).not.toHaveBeenCalled(); // fails loudly instead of silently creating a draft
+  });
+});
+
+describe("create-finalized-* (finalize tier): the only finalize path", () => {
+  it("POSTs ?finalize=true, strips confirm_finalize, and returns finalized:true", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor(registerDocumentFinalizeTools, client);
+    const res = (await handlers["create-finalized-invoice"]({
+      ...docBody,
       confirm_finalize: true,
     })) as { structuredContent: { finalized: boolean } };
-    expect((post.mock.calls[0] as [string, unknown, Record<string, unknown>])[2]).toEqual({ finalize: true });
+    const call = post.mock.calls[0] as [string, Record<string, unknown>, Record<string, unknown>];
+    expect(call[0]).toBe("/v1/invoices");
+    expect(call[2]).toEqual({ finalize: true });
+    expect(call[1].confirm_finalize).toBeUndefined(); // confirmation flag never sent to the API
     expect(res.structuredContent.finalized).toBe(true);
+  });
+
+  it("passes precedingSalesVoucherId alongside finalize (pursue → issue in one step)", async () => {
+    const post = vi.fn(async () => ({ id: "i1" }));
+    const client = { post } as unknown as LexwareClient;
+    const handlers = handlersFor(registerDocumentFinalizeTools, client);
+    await handlers["create-finalized-invoice"]({
+      ...docBody,
+      confirm_finalize: true,
+      precedingSalesVoucherId: "q9",
+    });
+    const query = (post.mock.calls[0] as [string, unknown, Record<string, unknown>])[2];
+    expect(query).toEqual({ finalize: true, precedingSalesVoucherId: "q9" });
+  });
+});
+
+describe("delete tools: idempotent (a retried delete that already succeeded returns 404)", () => {
+  it("delete-article reports deleted with alreadyAbsent=false on a real delete", async () => {
+    const request = vi.fn(async () => undefined);
+    const client = { request } as unknown as LexwareClient;
+    const res = (await handlersFor(registerArticleDeleteTools, client)["delete-article"]({
+      id: "a1",
+    })) as { structuredContent: { deleted: boolean; alreadyAbsent: boolean } };
+    expect(res.structuredContent.deleted).toBe(true);
+    expect(res.structuredContent.alreadyAbsent).toBe(false);
+  });
+
+  it("delete-article treats a 404 as already-deleted and flags alreadyAbsent=true", async () => {
+    const request = vi.fn(async () => {
+      throw new LexwareApiError(404, "not found");
+    });
+    const client = { request } as unknown as LexwareClient;
+    const res = (await handlersFor(registerArticleDeleteTools, client)["delete-article"]({
+      id: "a1",
+    })) as { structuredContent: { deleted: boolean; alreadyAbsent: boolean } };
+    expect(res.structuredContent.deleted).toBe(true);
+    expect(res.structuredContent.alreadyAbsent).toBe(true);
+  });
+
+  it("delete-article still throws on a non-404 error", async () => {
+    const request = vi.fn(async () => {
+      throw new LexwareApiError(409, "conflict");
+    });
+    const client = { request } as unknown as LexwareClient;
+    await expect(handlersFor(registerArticleDeleteTools, client)["delete-article"]({ id: "a1" })).rejects.toThrow();
+  });
+
+  it("delete-event-subscription treats a 404 as already-unsubscribed", async () => {
+    const request = vi.fn(async () => {
+      throw new LexwareApiError(404, "not found");
+    });
+    const client = { request } as unknown as LexwareClient;
+    const res = (await handlersFor(registerEventSubscriptionDeleteTools, client)["delete-event-subscription"]({
+      id: "s1",
+    })) as { structuredContent: { deleted: boolean; alreadyAbsent: boolean } };
+    expect(res.structuredContent.deleted).toBe(true);
+    expect(res.structuredContent.alreadyAbsent).toBe(true);
   });
 });
 
@@ -403,6 +513,8 @@ describe("summarize-vouchers (server-side aggregation, no row dump)", () => {
     };
     expect(get).toHaveBeenCalledTimes(1);
     expect(res.structuredContent.truncated).toBe(true);
+    // Exactly one page was fetched, so pagesScanned is 1 (not the old page+1 = 2).
+    expect(res.structuredContent.pagesScanned).toBe(1);
     expect(res.structuredContent.groups[0].key).toBe("all");
   });
 });

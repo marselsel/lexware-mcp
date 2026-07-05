@@ -43,6 +43,7 @@ export class LexwareClient {
   private readonly debug: boolean;
   private readonly fetchFn: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
   private readonly random: () => number;
   private readonly maxRetries: number;
   private readonly requestTimeoutMs: number;
@@ -54,6 +55,7 @@ export class LexwareClient {
     this.debug = opts.debug ?? false;
     this.fetchFn = opts.fetchFn ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.now = opts.now ?? Date.now;
     this.random = opts.random ?? Math.random;
     this.maxRetries = opts.maxRetries ?? 4;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
@@ -86,7 +88,11 @@ export class LexwareClient {
       body: bodyText,
       idempotent: opts.idempotent,
     });
-    return (await this.safeParse(res)) as T;
+    try {
+      return (await this.safeParse(res)) as T;
+    } catch (err) {
+      throw this.bodyReadError(method, path, err);
+    }
   }
 
   /**
@@ -102,8 +108,12 @@ export class LexwareClient {
       headers: { Authorization: `Bearer ${this.apiKey}`, Accept: accept },
       idempotent: true,
     });
-    const data = Buffer.from(await res.arrayBuffer());
-    return { data, contentType: res.headers.get("content-type") ?? accept };
+    try {
+      const data = Buffer.from(await res.arrayBuffer());
+      return { data, contentType: res.headers.get("content-type") ?? accept };
+    } catch (err) {
+      throw this.bodyReadError("GET", path, err);
+    }
   }
 
   /**
@@ -186,18 +196,29 @@ export class LexwareClient {
 
       // 429 is always safe to retry: a throttled call is not executed.
       if (res.status === 429 && attempt < this.maxRetries) {
-        await this.sleep(this.retryAfterMs(res, attempt));
+        const waitMs = this.retryAfterMs(res, attempt);
+        await this.drain(res); // release the keep-alive connection before retrying
+        await this.sleep(waitMs);
         attempt++;
         continue;
       }
       // Transient upstream errors: retry only idempotent calls.
       if (RETRYABLE_STATUS.has(res.status) && opts.idempotent && attempt < this.maxRetries) {
+        await this.drain(res); // release the keep-alive connection before retrying
         await this.backoff(attempt++);
         continue;
       }
 
       if (!res.ok) {
-        const body = await this.safeParse(res);
+        // Read the error body defensively: if the body stream fails mid-read we still
+        // throw a LexwareApiError carrying the real status (so e.g. a 404 stays a 404
+        // and isNotFound() keeps working), just without the parsed detail.
+        let body: unknown;
+        try {
+          body = await this.safeParse(res);
+        } catch {
+          body = undefined;
+        }
         throw new LexwareApiError(res.status, describeErrorBody(res.status, res.statusText, body), body);
       }
 
@@ -213,6 +234,24 @@ export class LexwareClient {
       }
     }
     return url.toString();
+  }
+
+  /** Discard an abandoned response body so undici can reuse the keep-alive socket. */
+  private async drain(res: Response): Promise<void> {
+    try {
+      await res.body?.cancel();
+    } catch {
+      // Best-effort: a body already errored/closed is fine to ignore.
+    }
+  }
+
+  /** Map a failure while reading a response body to a classified network error. */
+  private bodyReadError(method: string, path: string, err: unknown): LexwareApiError {
+    this.log(method, path, "body-read-error");
+    return new LexwareApiError(
+      0,
+      `Network error reading Lexware response: ${err instanceof Error ? err.message : "unknown"}`,
+    );
   }
 
   /** Parse a response body as JSON when possible, otherwise return text/undefined. */
@@ -240,7 +279,7 @@ export class LexwareClient {
         ms = Number(trimmed) * 1000;
       } else {
         const date = Date.parse(trimmed);
-        if (!Number.isNaN(date)) ms = date - Date.now();
+        if (!Number.isNaN(date)) ms = date - this.now();
       }
       if (ms !== undefined) {
         // Clamp: never hammer (floor) and never hang for minutes/hours (ceiling).

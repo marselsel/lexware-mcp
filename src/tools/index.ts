@@ -42,16 +42,19 @@ export function registerTools(server: McpServer, client: LexwareClient, config: 
   if (capabilities.drafts) {
     registerContactDraftTools(server, client);
     registerArticleWriteTools(server, client);
-    registerDocumentDraftTools(server, client, capabilities.finalize);
+    registerDocumentDraftTools(server, client);
     registerVoucherWriteTools(server, client);
     registerFileWriteTools(server, client);
-    registerEventSubscriptionWriteTools(server, client);
   }
 
-  // Finalize / binding & irreversible tier.
+  // Finalize / sensitive & irreversible tier (off by default).
   if (capabilities.finalize) {
     registerDocumentFinalizeTools(server, client);
     registerArticleDeleteTools(server, client);
+    // Event-subscription create + delete are gated here (not drafts): a webhook streams
+    // financial events to an arbitrary external URL (exfiltration-capable) and delete can
+    // sever a third-party integration, so both are opt-in and registered together.
+    registerEventSubscriptionWriteTools(server, client);
     registerEventSubscriptionDeleteTools(server, client);
   }
 }

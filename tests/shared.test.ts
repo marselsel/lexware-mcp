@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { deepMergePatch, mergeAddresses } from "../src/tools/shared.js";
+import { describe, expect, it, vi } from "vitest";
+import type { LexwareClient } from "../src/lexware/client.js";
+import { LexwareApiError } from "../src/lexware/errors.js";
+import type { Paged } from "../src/lexware/types.js";
+import {
+  binaryResult,
+  decodeBase64Strict,
+  deepMergePatch,
+  deleteIdempotent,
+  mergeAddresses,
+  pagedResult,
+} from "../src/tools/shared.js";
+import { mergeBody } from "../src/tools/schemas.js";
 
 describe("deepMergePatch (read-modify-write)", () => {
   it("preserves base fields the patch omits", () => {
@@ -68,5 +79,147 @@ describe("mergeAddresses (index-wise contact address merge)", () => {
       { city: "Munich", countryCode: "DE" },
     ]);
     expect(out.shipping).toEqual([{ city: "Hamburg", countryCode: "DE" }]);
+  });
+});
+
+describe("decodeBase64Strict", () => {
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+
+  it("decodes valid standard base64", () => {
+    expect(decodeBase64Strict(b64("hello")).toString("utf8")).toBe("hello");
+  });
+
+  it("strips a data-URI prefix", () => {
+    expect(decodeBase64Strict(`data:application/pdf;base64,${b64("PDF")}`).toString("utf8")).toBe("PDF");
+  });
+
+  it("tolerates embedded whitespace/newlines (wrapped base64)", () => {
+    const wrapped = `${b64("hello world foo bar")}`.replace(/(.{4})/g, "$1\n");
+    expect(decodeBase64Strict(wrapped).toString("utf8")).toBe("hello world foo bar");
+  });
+
+  it("accepts the URL-safe alphabet", () => {
+    const urlSafe = Buffer.from("~~~ ??", "utf8").toString("base64url");
+    expect(decodeBase64Strict(urlSafe).toString("utf8")).toBe("~~~ ??");
+  });
+
+  it("rejects non-base64 characters instead of silently dropping them", () => {
+    // Bare Buffer.from would skip the '!' and '*' and return garbage; we reject.
+    expect(() => decodeBase64Strict("not valid!!! base64 ***")).toThrow(/invalid base64/);
+  });
+
+  it("rejects an empty payload", () => {
+    expect(() => decodeBase64Strict("   ")).toThrow(/empty/);
+  });
+
+  it("accepts non-canonical padding that standard decoders decode identically", () => {
+    // "TR==" and "TQ==" both decode to byte 0x4D; a re-encode round-trip would wrongly
+    // reject "TR==", so the charset+length check must accept it.
+    expect(decodeBase64Strict("TR==")[0]).toBe(0x4d);
+  });
+
+  it("rejects a length that cannot be valid base64 (len % 4 === 1)", () => {
+    expect(() => decodeBase64Strict("QUJD")).not.toThrow(); // 4 chars, valid
+    expect(() => decodeBase64Strict("QUJDR")).toThrow(); // 5 chars → len%4=1, impossible
+  });
+});
+
+describe("mergeBody (create-tool escape hatch)", () => {
+  it("merges additionalFields under the typed input (input wins)", () => {
+    const out = mergeBody({ name: "typed" }, { name: "extra", xRechnung: { ref: "r" } });
+    expect(out).toEqual({ name: "typed", xRechnung: { ref: "r" } });
+  });
+
+  it("strips reserved control keys from additionalFields", () => {
+    const out = mergeBody(
+      { title: "t" },
+      { finalize: true, confirm_finalize: true, precedingSalesVoucherId: "q", version: 5, id: "x", ok: 1 },
+    );
+    expect(out).toEqual({ title: "t", ok: 1 });
+  });
+
+  it("tolerates a missing/non-object additionalFields", () => {
+    expect(mergeBody({ a: 1 }, undefined)).toEqual({ a: 1 });
+    expect(mergeBody({ a: 1 }, "nope")).toEqual({ a: 1 });
+    expect(mergeBody({ a: 1 }, ["x"])).toEqual({ a: 1 });
+  });
+});
+
+describe("deleteIdempotent", () => {
+  it("returns alreadyAbsent=false when the DELETE succeeds", async () => {
+    const request = vi.fn(async () => undefined);
+    const client = { request } as unknown as LexwareClient;
+    await expect(deleteIdempotent(client, "/v1/articles/a1")).resolves.toEqual({
+      deleted: true,
+      alreadyAbsent: false,
+    });
+    expect(request).toHaveBeenCalledWith("DELETE", "/v1/articles/a1", { idempotent: true });
+  });
+
+  it("swallows a 404 and flags alreadyAbsent=true", async () => {
+    const client = {
+      request: vi.fn(async () => {
+        throw new LexwareApiError(404, "not found");
+      }),
+    } as unknown as LexwareClient;
+    await expect(deleteIdempotent(client, "/v1/articles/a1")).resolves.toEqual({
+      deleted: true,
+      alreadyAbsent: true,
+    });
+  });
+
+  it("rethrows a non-404 error", async () => {
+    const client = {
+      request: vi.fn(async () => {
+        throw new LexwareApiError(409, "conflict");
+      }),
+    } as unknown as LexwareClient;
+    await expect(deleteIdempotent(client, "/v1/articles/a1")).rejects.toThrow();
+  });
+});
+
+describe("pagedResult", () => {
+  const paged = (over: Partial<Paged<unknown>>): Paged<unknown> => ({
+    content: [],
+    first: true,
+    last: true,
+    number: 0,
+    numberOfElements: 0,
+    size: 25,
+    totalPages: 0,
+    totalElements: 0,
+    ...over,
+  });
+
+  it("renders page 1/1 (not the impossible 1/0) for an empty result set", () => {
+    const res = pagedResult(paged({}), "contact(s)");
+    expect(res.content[0].text).toBe("Found 0 contact(s); showing page 1/1.");
+  });
+
+  it("renders the real 1-based page/total for a populated set", () => {
+    const res = pagedResult(paged({ number: 1, totalPages: 3, totalElements: 70 }), "article(s)");
+    expect(res.content[0].text).toBe("Found 70 article(s); showing page 2/3.");
+  });
+});
+
+describe("binaryResult", () => {
+  it("builds a text summary + an embedded-resource block with base64 data", () => {
+    const data = Buffer.from("%PDF-1.7");
+    const res = binaryResult({
+      uri: "lexware://files/f1",
+      data,
+      contentType: "application/pdf",
+      structuredContent: { fileId: "f1" },
+      message: "Downloaded file f1.",
+    });
+    expect(res.content[0]).toEqual({ type: "text", text: "Downloaded file f1." });
+    expect(res.content[1]).toEqual({
+      type: "resource",
+      resource: {
+        uri: "lexware://files/f1",
+        mimeType: "application/pdf",
+        blob: data.toString("base64"),
+      },
+    });
   });
 });

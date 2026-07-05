@@ -9,10 +9,11 @@ function run(authHeader?: string) {
   const req = { headers: authHeader ? { authorization: authHeader } : {} } as Request;
   const json = vi.fn();
   const status = vi.fn(() => ({ json }) as unknown as Response);
-  const res = { status } as unknown as Response;
+  const set = vi.fn();
+  const res = { status, set } as unknown as Response;
   const next = vi.fn() as unknown as NextFunction;
   mw(req, res, next);
-  return { status, json, next };
+  return { status, json, set, next };
 }
 
 describe("bearerAuthMiddleware", () => {
@@ -38,5 +39,10 @@ describe("bearerAuthMiddleware", () => {
     const { status, next } = run(`Bearer ${TOKEN}`);
     expect(status).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  it("sets a WWW-Authenticate challenge on a 401 (RFC 9110)", () => {
+    const { set } = run("Bearer wrong");
+    expect(set).toHaveBeenCalledWith("WWW-Authenticate", expect.stringContaining("Bearer"));
   });
 });

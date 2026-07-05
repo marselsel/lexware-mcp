@@ -3,13 +3,15 @@ import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
 import {
+  additionalFieldsParam,
   articleInputShape,
   articleUpdateShape,
+  mergeBody,
   pageParam,
   sizeParam,
   versionParam,
 } from "./schemas.js";
-import { DESTRUCTIVE, RO, WRITE, deepMergePatch, pagedResult, text } from "./shared.js";
+import { DESTRUCTIVE, RO, WRITE, deepMergePatch, deleteIdempotent, pagedResult, text } from "./shared.js";
 
 /** Read tools for articles (products/services). Always registered. */
 export function registerArticleReadTools(server: McpServer, client: LexwareClient): void {
@@ -62,11 +64,11 @@ export function registerArticleWriteTools(server: McpServer, client: LexwareClie
     {
       name: "create-article",
       description: "Create a new article (product or service).",
-      inputSchema: articleInputShape,
+      inputSchema: { ...articleInputShape, additionalFields: additionalFieldsParam },
       annotations: WRITE,
     },
-    async (input) => {
-      const created = await client.post<{ id: string }>("/v1/articles", input);
+    async ({ additionalFields, ...input }) => {
+      const created = await client.post<{ id: string }>("/v1/articles", mergeBody(input, additionalFields));
       return { structuredContent: created, content: text(`Created article ${created.id}.`) };
     },
   );
@@ -113,17 +115,17 @@ export function registerArticleDeleteTools(server: McpServer, client: LexwareCli
   server.registerTool(
     {
       name: "delete-article",
-      description: "Delete an article (product/service) by id. This is irreversible.",
+      description:
+        "Delete an article (product/service) by id. This is irreversible. Idempotent: deleting an id that is " +
+        "already absent reports success (the end state is the same).",
       inputSchema: { id: z.string() },
       annotations: DESTRUCTIVE,
     },
     async ({ id }) => {
-      await client.request<unknown>("DELETE", `/v1/articles/${encodeURIComponent(id)}`, {
-        idempotent: true,
-      });
+      const { alreadyAbsent } = await deleteIdempotent(client, `/v1/articles/${encodeURIComponent(id)}`);
       return {
-        structuredContent: { id, deleted: true },
-        content: text(`Deleted article ${id}.`),
+        structuredContent: { id, deleted: true, alreadyAbsent },
+        content: text(alreadyAbsent ? `Article ${id} was already absent (nothing to delete).` : `Deleted article ${id}.`),
       };
     },
   );

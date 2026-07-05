@@ -28,13 +28,13 @@ Related projects — local (stdio) Lexware MCP servers:
 
 ## Capabilities
 
-65 tools across three tiers you enable via environment variables:
+60 tools across three tiers you enable via environment variables:
 
 | Tier | Default | What it covers |
 |------|---------|----------------|
-| **Read** | always on | Profile; contacts & articles (list/get); the voucherlist; full documents (invoices, quotations, credit notes, order confirmations, delivery notes, dunnings, down-payment invoices, vouchers); **render any document type to PDF** and **download files/receipts** (returned inline as embedded resources); batch & type-dispatched reads (get-vouchers, get-document, get-voucher-file, get-document-file); payments; reference data (countries, payment conditions, posting categories, print layouts); recurring templates (get & list); event subscriptions; document deeplinks |
-| **Drafts/writes** (`LEXWARE_ENABLE_DRAFTS`) | on | Create **and update draft** invoices/quotations/credit-notes/order-confirmations/delivery-notes/dunnings; create & update contacts, articles, and **bookkeeping vouchers**; **upload files** and **attach receipts** to vouchers; create event subscriptions; optionally issue documents **finalized** (`finalize=true`, requires `LEXWARE_ENABLE_FINALIZE`) or as **follow-ups** (`precedingSalesVoucherId`) |
-| **Finalize** (`LEXWARE_ENABLE_FINALIZE`) | off | Issue **legally binding** finalized documents (confirmation-gated); irreversible deletes (articles, event subscriptions) |
+| **Read** | always on | Profile; contacts & articles (list/get); the voucherlist (plus `summarize-vouchers` for server-side totals); full documents (invoices, quotations, credit notes, order confirmations, delivery notes, dunnings, down-payment invoices, vouchers); **render any document type to PDF** and **download files/receipts** (returned inline as embedded resources); batch & type-dispatched reads (get-vouchers, get-document, get-voucher-file, get-document-file); payments; reference data (countries, payment conditions, posting categories, print layouts); recurring templates (get & list); event subscriptions; document deeplinks |
+| **Drafts/writes** (`LEXWARE_ENABLE_DRAFTS`) | on | Create **draft** invoices/quotations/credit-notes/order-confirmations/delivery-notes/dunnings (the Lexware API has no update endpoint for these — set every field, including payment terms, at creation); create & update contacts, articles, and **bookkeeping vouchers**; **upload files** and **attach receipts** to vouchers; create documents as **follow-ups** (`precedingSalesVoucherId`) |
+| **Finalize** (`LEXWARE_ENABLE_FINALIZE`) | off | Issue **legally binding** finalized documents in one step via the dedicated `create-finalized-*` tools (confirmation-gated); irreversible article deletes; **manage webhook event subscriptions** (create + delete — a webhook streams financial events to an external URL, so it's opt-in). Enabling this tier also enables Drafts. |
 
 Set `LEXWARE_READ_ONLY=true` to force read-only (overrides the flags above).
 
@@ -97,11 +97,13 @@ LEXWARE_API_KEY=... MCP_AUTH_TOKEN=... npm start
 | `OAUTH_RESOURCE` / `SERVER_URL` | — | This server's public URL (token audience / Resource Indicator). Required in OAuth mode |
 | `OAUTH_ALLOWED_EMAIL_DOMAINS` | — | Comma-separated allow-list of email domains (e.g. `example.com`) |
 | `OAUTH_VERIFY_AUDIENCE` | `true` | Verify the token `aud` matches `OAUTH_RESOURCE`. **Keep `true`.** Setting `false` accepts *any* valid token from the issuer — including one minted for a different app on the same issuer (a confused-deputy risk). Only disable for a dedicated, single-audience issuer that has no Resource Indicator |
+| `OAUTH_JWKS_URL` / `OAUTH_USERINFO_URL` | derived from issuer | Override the JWKS / OIDC userinfo endpoints (defaults use the WorkOS-AuthKit layout) |
+| `OAUTH_AUTHORIZATION_ENDPOINT` / `OAUTH_TOKEN_ENDPOINT` / `OAUTH_REGISTRATION_ENDPOINT` | derived from issuer | Override the endpoints advertised in the authorization-server metadata. Defaults use the WorkOS layout (`{issuer}/oauth2/*`); set these for other IdPs (e.g. Auth0: `/authorize`, `/oauth/token`) |
 | `MCP_AUTH_TOKEN` | — (**required**¹) | Static bearer token clients send to reach `/mcp` (used when OAuth is off) |
-| `MCP_ALLOW_UNAUTHENTICATED` | `false` | Opt out of auth (trusted local use only) |
+| `MCP_ALLOW_UNAUTHENTICATED` | `false` | Opt out of auth (trusted local use only — bind to localhost/private network) |
 | `LEXWARE_READ_ONLY` | `false` | Register only read tools (hard override) |
 | `LEXWARE_ENABLE_DRAFTS` | `true` | Enable create-draft tools |
-| `LEXWARE_ENABLE_FINALIZE` | `false` | Enable finalize / legally-binding tools |
+| `LEXWARE_ENABLE_FINALIZE` | `false` | Enable finalize / legally-binding tools (also enables Drafts) |
 | `LEXWARE_API_BASE_URL` | `https://api.lexware.io` | API base URL |
 | `LEXWARE_APP_BASE_URL` | `https://app.lexware.de` | Web-app base for document deeplinks |
 | `PORT` | `8080` | Listen port (your platform may inject this) |

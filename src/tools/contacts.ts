@@ -3,10 +3,12 @@ import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import type { Paged } from "../lexware/types.js";
 import {
+  additionalFieldsParam,
   contactInputShape,
   contactUpdateShape,
   jsonBool,
   jsonNum,
+  mergeBody,
   pageParam,
   sizeParam,
   versionParam,
@@ -66,15 +68,18 @@ export function registerContactDraftTools(server: McpServer, client: LexwareClie
       name: "create-contact",
       description:
         "Create a new contact (customer and/or vendor). Provide roles plus either a person (lastName required) or a company (name required).",
-      inputSchema: contactInputShape,
+      inputSchema: { ...contactInputShape, additionalFields: additionalFieldsParam },
       annotations: WRITE,
     },
-    async (input) => {
+    async ({ additionalFields, ...input }) => {
       if (!input.person && !input.company) {
         throw new Error("Provide either a person (with lastName) or a company (with name).");
       }
       // `version` must be 0 when creating.
-      const created = await client.post<{ id: string }>("/v1/contacts", { version: 0, ...input });
+      const created = await client.post<{ id: string }>("/v1/contacts", {
+        version: 0,
+        ...mergeBody(input, additionalFields),
+      });
       return { structuredContent: created, content: text(`Created contact ${created.id}.`) };
     },
   );
