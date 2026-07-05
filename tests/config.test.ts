@@ -47,6 +47,25 @@ describe("loadConfig", () => {
       resource: "https://mcp.example.com",
       verifyAudience: true,
       allowedEmailDomains: ["example.com", "example.org"],
+      authorizationEndpoint: "https://auth.example.com/oauth2/authorize",
+      tokenEndpoint: "https://auth.example.com/oauth2/token",
+      registrationEndpoint: "https://auth.example.com/oauth2/register",
+    });
+  });
+
+  it("allows overriding the OAuth endpoints for non-WorkOS IdPs (e.g. Auth0)", () => {
+    const c = loadConfig({
+      LEXWARE_API_KEY: "k",
+      OAUTH_ISSUER: "https://tenant.auth0.com/",
+      SERVER_URL: "https://mcp.example.com",
+      OAUTH_AUTHORIZATION_ENDPOINT: "https://tenant.auth0.com/authorize",
+      OAUTH_TOKEN_ENDPOINT: "https://tenant.auth0.com/oauth/token",
+    } as NodeJS.ProcessEnv);
+    expect(c.auth).toMatchObject({
+      authorizationEndpoint: "https://tenant.auth0.com/authorize",
+      tokenEndpoint: "https://tenant.auth0.com/oauth/token",
+      // registration endpoint keeps the derived default when not overridden
+      registrationEndpoint: "https://tenant.auth0.com/oauth2/register",
     });
   });
 
@@ -97,6 +116,21 @@ describe("loadConfig", () => {
   it("can disable drafts", () => {
     const c = loadConfig({ ...base(), LEXWARE_ENABLE_DRAFTS: "false" } as NodeJS.ProcessEnv);
     expect(c.capabilities.drafts).toBe(false);
+  });
+
+  it("finalize force-enables drafts and records a warning when drafts was explicitly off", () => {
+    const c = loadConfig({
+      ...base(),
+      LEXWARE_ENABLE_DRAFTS: "false",
+      LEXWARE_ENABLE_FINALIZE: "true",
+    } as NodeJS.ProcessEnv);
+    expect(c.capabilities).toMatchObject({ drafts: true, finalize: true });
+    expect(c.warnings.join(" ")).toMatch(/overridden to true because LEXWARE_ENABLE_FINALIZE/);
+  });
+
+  it("records no override warning when drafts is left at its default", () => {
+    const c = loadConfig({ ...base(), LEXWARE_ENABLE_FINALIZE: "true" } as NodeJS.ProcessEnv);
+    expect(c.warnings).toEqual([]);
   });
 
   it("rejects an invalid PORT", () => {

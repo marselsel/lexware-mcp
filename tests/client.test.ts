@@ -17,7 +17,7 @@ function binary(bytes: Uint8Array, status = 200, headers: Record<string, string>
 }
 
 /** Client with rate limiting effectively disabled and deterministic backoff. */
-function makeClient(fetchFn: typeof fetch, slept: number[] = []) {
+function makeClient(fetchFn: typeof fetch, slept: number[] = [], now?: () => number) {
   return new LexwareClient({
     baseUrl: "https://api.test",
     apiKey: "secret-key",
@@ -26,9 +26,29 @@ function makeClient(fetchFn: typeof fetch, slept: number[] = []) {
       slept.push(ms);
     },
     random: () => 0,
+    now,
     rateLimit: { capacity: 1000, refillPerSec: 1000 },
     maxRetries: 4,
   });
+}
+
+/** A 200 Response whose body read rejects, to exercise the body-stream error path. */
+function bodyReadFails(read: "text" | "arrayBuffer"): Response {
+  return {
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: new Headers({ "content-type": "application/json" }),
+    body: null,
+    text: async () => {
+      if (read === "text") throw new TypeError("terminated");
+      return "";
+    },
+    arrayBuffer: async () => {
+      if (read === "arrayBuffer") throw new TypeError("terminated");
+      return new ArrayBuffer(0);
+    },
+  } as unknown as Response;
 }
 
 describe("LexwareClient", () => {
@@ -199,6 +219,40 @@ describe("LexwareClient", () => {
     const { data } = await client.getBinary("/v1/files/x");
     expect([...data]).toEqual([9]);
     expect(n).toBe(2);
+  });
+
+  it("maps a body-read failure on request() to a classified network error (not a raw stream error)", async () => {
+    const fetchFn = vi.fn(async () => bodyReadFails("text")) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const err = await client.get("/v1/profile").catch((e) => e);
+    expect(err).toBeInstanceOf(LexwareApiError);
+    expect(err.status).toBe(0);
+    expect(err.kind).toBe("network");
+    expect(err.message).toContain("reading Lexware response");
+  });
+
+  it("maps a body-read failure on getBinary to a classified network error", async () => {
+    const fetchFn = vi.fn(async () => bodyReadFails("arrayBuffer")) as unknown as typeof fetch;
+    const client = makeClient(fetchFn);
+    const err = await client.getBinary("/v1/files/x").catch((e) => e);
+    expect(err).toBeInstanceOf(LexwareApiError);
+    expect(err.status).toBe(0);
+    expect(err.kind).toBe("network");
+  });
+
+  it("computes an HTTP-date Retry-After against the injected clock, not wall time", async () => {
+    const slept: number[] = [];
+    const nowMs = 1_000_000_000_000;
+    const retryAt = new Date(nowMs + 5000).toUTCString(); // 5s in the future per the injected clock
+    let n = 0;
+    const fetchFn = vi.fn(async () => {
+      n += 1;
+      return n === 1 ? json({}, 429, { "retry-after": retryAt }) : json({ ok: true });
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchFn, slept, () => nowMs);
+    await client.get("/v1/profile");
+    // ~5000ms (clamped into [250, 30000]); would be a wild value if wall-clock Date.now() were used.
+    expect(slept.some((ms) => ms >= 4000 && ms <= 6000)).toBe(true);
   });
 
   it("getBinary maps a 406 to a validation error", async () => {

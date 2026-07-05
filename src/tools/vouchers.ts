@@ -1,8 +1,8 @@
 import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
-import { voucherInputShape, voucherUpdateShape } from "./schemas.js";
-import { WRITE, deepMergePatch, text } from "./shared.js";
+import { additionalFieldsParam, mergeBody, versionParam, voucherInputShape, voucherUpdateShape } from "./schemas.js";
+import { WRITE, decodeBase64Strict, deepMergePatch, text } from "./shared.js";
 
 /** Voucher statuses lexoffice DERIVES from payments — re-sending them on PUT is rejected (invalid_value). */
 const DERIVED_VOUCHER_STATUSES = new Set(["paid", "paidoff", "voided", "transferred", "sepadebit"]);
@@ -19,12 +19,12 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
       description:
         "Create a bookkeeping voucher (a manually-booked sales/purchase transaction). Returns the new id. " +
         "To attach a receipt afterwards, use upload-voucher-file.",
-      inputSchema: voucherInputShape,
+      inputSchema: { ...voucherInputShape, additionalFields: additionalFieldsParam },
       annotations: WRITE,
     },
-    async (input) => {
+    async ({ additionalFields, ...input }) => {
       // `version` must be 0 when creating (optimistic locking), mirroring contacts.
-      const body: Record<string, unknown> = { version: 0, ...input };
+      const body: Record<string, unknown> = { version: 0, ...mergeBody(input, additionalFields) };
       // A referenced contactId can't coexist with a custom contactName (lexoffice 406).
       if (input.contactId) {
         delete body.contactName;
@@ -51,11 +51,7 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
         "(omit for latest).",
       inputSchema: {
         id: z.string(),
-        version: z
-          .number()
-          .int()
-          .optional()
-          .describe("Current version from get-voucher (optimistic lock). Omit to use the latest."),
+        version: versionParam("get-voucher"),
         ...voucherUpdateShape,
       },
       annotations: WRITE,
@@ -69,10 +65,17 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
         version: version ?? (current.version as number),
       });
       // A1: a referenced contactId can't coexist with a custom contactName (lexoffice:
-      // custom_contact_name_for_referenced_contact_not_allowed). Drop the name + collective flag.
+      // custom_contact_name_for_referenced_contact_not_allowed). Whichever the caller
+      // sets wins; the other is dropped from the merged body so they never coexist.
       if (fields.contactId) {
         delete body.contactName;
         body.useCollectiveContact = false;
+      } else if (fields.contactName) {
+        // Switching to a one-off name: drop the contactId carried over from the current
+        // voucher (the schema can't express contactId:null), and book to the collective
+        // contact — lexoffice pairs a custom contactName with useCollectiveContact:true.
+        delete body.contactId;
+        body.useCollectiveContact = true;
       }
       // B1: omit a payment-derived voucherStatus unless the caller set one explicitly, so a
       // paid-but-not-filed voucher stays editable (and an explicit "voided" is still attempted).
@@ -96,8 +99,8 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
       name: "upload-voucher-file",
       description:
         "Attach a file (receipt/scan) to a bookkeeping voucher via POST /v1/vouchers/{id}/files. Provide the " +
-        "file as base64 (inline; keep it under a few MB). To RE-LINK an already-uploaded file by id without " +
-        "re-sending bytes, set the voucher's `files` array via update-voucher instead.",
+        "file as base64 (inline; ~12 MB body cap, so keep the source under ~8 MB). To RE-LINK an already-uploaded " +
+        "file by id without re-sending bytes, set the voucher's `files` array via update-voucher instead.",
       inputSchema: {
         id: z.string().describe("The voucher id to attach the file to."),
         fileBase64: z.string().describe("File contents, base64-encoded."),
@@ -107,7 +110,7 @@ export function registerVoucherWriteTools(server: McpServer, client: LexwareClie
       annotations: WRITE,
     },
     async ({ id, fileBase64, filename, mimeType }) => {
-      const bytes = Buffer.from(fileBase64, "base64");
+      const bytes = decodeBase64Strict(fileBase64, "fileBase64");
       const result = await client.postMultipart<Record<string, unknown>>(
         `/v1/vouchers/${encodeURIComponent(id)}/files`,
         { bytes, filename, contentType: mimeType },

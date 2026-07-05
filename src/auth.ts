@@ -18,6 +18,9 @@ export function bearerAuthMiddleware(token: string): RequestHandler {
     const ok =
       providedBuf.length === expected.length && timingSafeEqual(providedBuf, expected);
     if (!ok) {
+      // RFC 9110 §11.6.1: a 401 MUST carry a WWW-Authenticate challenge so clients
+      // know a bearer token is expected (mirrors the OAuth path's behaviour).
+      res.set("WWW-Authenticate", 'Bearer error="invalid_token"');
       res.status(401).json({ error: "unauthorized" });
       return;
     }

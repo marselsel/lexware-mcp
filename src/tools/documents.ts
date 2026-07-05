@@ -1,19 +1,21 @@
 import type { ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
-import { embeddedResource, type McpServer } from "skybridge/server";
+import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
 import { type Paged, VOUCHER_STATUSES, VOUCHER_TYPES, type VoucherlistEntry } from "../lexware/types.js";
 import {
+  additionalFieldsParam,
   genericDocumentInputShape,
   invoiceInputShape,
   jsonBool,
   jsonNum,
   jsonObj,
+  mergeBody,
   pageParam,
   quotationInputShape,
   sizeParam,
 } from "./schemas.js";
-import { LOCAL_RO, RO, WRITE, pagedResult, text } from "./shared.js";
+import { LOCAL_RO, RO, WRITE, binaryResult, pagedResult, text } from "./shared.js";
 
 /** A Lexware voucher-document type and how to create it. */
 interface DocType {
@@ -27,23 +29,17 @@ interface DocType {
   schema: ZodRawShapeCompat | null;
   /** Whether `?finalize=true` issuing is supported. */
   finalize: boolean;
-  /**
-   * Whether `GET /v1/{path}/{id}/document` renders a downloadable PDF for this
-   * type. Confirmed in the docs for invoice/quotation/credit-note/delivery-note;
-   * the others are left false until a read-only live check confirms support.
-   */
-  renderable: boolean;
 }
 
 const DOC_TYPES: DocType[] = [
-  { key: "invoice", path: "invoices", label: "invoice", schema: invoiceInputShape, finalize: true, renderable: true },
-  { key: "quotation", path: "quotations", label: "quotation", schema: quotationInputShape, finalize: true, renderable: true },
-  { key: "credit-note", path: "credit-notes", label: "credit note", schema: genericDocumentInputShape, finalize: true, renderable: true },
-  { key: "order-confirmation", path: "order-confirmations", label: "order confirmation", schema: genericDocumentInputShape, finalize: true, renderable: true },
-  { key: "delivery-note", path: "delivery-notes", label: "delivery note", schema: genericDocumentInputShape, finalize: true, renderable: true },
-  { key: "dunning", path: "dunnings", label: "dunning", schema: genericDocumentInputShape, finalize: true, renderable: true },
+  { key: "invoice", path: "invoices", label: "invoice", schema: invoiceInputShape, finalize: true },
+  { key: "quotation", path: "quotations", label: "quotation", schema: quotationInputShape, finalize: true },
+  { key: "credit-note", path: "credit-notes", label: "credit note", schema: genericDocumentInputShape, finalize: true },
+  { key: "order-confirmation", path: "order-confirmations", label: "order confirmation", schema: genericDocumentInputShape, finalize: true },
+  { key: "delivery-note", path: "delivery-notes", label: "delivery note", schema: genericDocumentInputShape, finalize: true },
+  { key: "dunning", path: "dunnings", label: "dunning", schema: genericDocumentInputShape, finalize: true },
   // down-payment-invoices are GET-only (no create/finalize) but still have a finalized PDF via /{id}/file.
-  { key: "down-payment-invoice", path: "down-payment-invoices", label: "down payment invoice", schema: null, finalize: false, renderable: true },
+  { key: "down-payment-invoice", path: "down-payment-invoices", label: "down payment invoice", schema: null, finalize: false },
 ];
 
 /** Document resource paths — the `resourceType` enum for get-document-file. */
@@ -85,6 +81,7 @@ const VOUCHERTYPE_TO_PATH: Record<string, string> = {
   salesinvoice: "vouchers",
   salescreditnote: "vouchers",
   voucher: "vouchers",
+  recurringtemplate: "recurring-templates",
 };
 
 /** Dimensions `summarize-vouchers` can group totals by. */
@@ -191,6 +188,7 @@ export function registerDocumentReadTools(
       let scanned = 0;
       let totalElements = 0;
       let page = 0;
+      let pagesScanned = 0;
       let truncated = false;
       // Walk every page; we only keep aggregates, so the response size is bounded
       // regardless of how many vouchers match.
@@ -206,6 +204,7 @@ export function registerDocumentReadTools(
           size: SIZE,
         });
         totalElements = res.totalElements;
+        pagesScanned++;
         for (const row of res.content) {
           scanned++;
           const key = summaryGroupKey(row, groupBy);
@@ -259,7 +258,7 @@ export function registerDocumentReadTools(
           },
           scanned,
           totalElements,
-          pagesScanned: page + 1,
+          pagesScanned,
           truncated,
           grandTotal: { sumTotalAmount: grandTotal, sumOpenAmount: grandOpen, currency },
           groups: groupList,
@@ -290,7 +289,6 @@ export function registerDocumentReadTools(
 
   // render-<doctype>-pdf: download a document's finalized PDF.
   for (const doc of DOC_TYPES) {
-    if (!doc.renderable) continue;
     server.registerTool(
       {
         name: `render-${doc.key}-pdf`,
@@ -304,17 +302,13 @@ export function registerDocumentReadTools(
         const { data, contentType } = await client.getBinary(
           `/v1/${doc.path}/${encodeURIComponent(id)}/file`,
         );
-        return {
+        return binaryResult({
+          uri: `lexware://${doc.path}/${id}/file`,
+          data,
+          contentType,
           structuredContent: { resource: doc.path, id, mimeType: contentType, byteLength: data.length },
-          content: [
-            ...text(`Downloaded ${doc.label} ${id} PDF (${data.length} bytes).`),
-            embeddedResource({
-              uri: `lexware://${doc.path}/${id}/file`,
-              mimeType: contentType,
-              blob: data.toString("base64"),
-            }),
-          ],
-        };
+          message: `Downloaded ${doc.label} ${id} PDF (${data.length} bytes).`,
+        });
       },
     );
   }
@@ -407,17 +401,13 @@ export function registerDocumentReadTools(
       const { data, contentType } = await client.getBinary(
         `/v1/${resourceType}/${encodeURIComponent(id)}/file`,
       );
-      return {
+      return binaryResult({
+        uri: `lexware://${resourceType}/${id}/file`,
+        data,
+        contentType,
         structuredContent: { resource: resourceType, id, mimeType: contentType, byteLength: data.length },
-        content: [
-          ...text(`Downloaded ${resourceType} ${id} PDF (${data.length} bytes).`),
-          embeddedResource({
-            uri: `lexware://${resourceType}/${id}/file`,
-            mimeType: contentType,
-            blob: data.toString("base64"),
-          }),
-        ],
-      };
+        message: `Downloaded ${resourceType} ${id} PDF (${data.length} bytes).`,
+      });
     },
   );
 
@@ -441,17 +431,13 @@ export function registerDocumentReadTools(
         throw new Error(`Voucher ${id} has no attached file at index ${fileIndex}.`);
       }
       const { data, contentType } = await client.getBinary(`/v1/files/${encodeURIComponent(fileId)}`);
-      return {
+      return binaryResult({
+        uri: `lexware://files/${fileId}`,
+        data,
+        contentType,
         structuredContent: { voucherId: id, fileId, mimeType: contentType, byteLength: data.length },
-        content: [
-          ...text(`Downloaded voucher ${id} receipt (${data.length} bytes, ${contentType}).`),
-          embeddedResource({
-            uri: `lexware://files/${fileId}`,
-            mimeType: contentType,
-            blob: data.toString("base64"),
-          }),
-        ],
-      };
+        message: `Downloaded voucher ${id} receipt (${data.length} bytes, ${contentType}).`,
+      });
     },
   );
 
@@ -489,22 +475,17 @@ function optionalShape(shape: ZodRawShapeCompat): ZodRawShapeCompat {
 }
 
 /** Draft-creation tools for every writable document type. Registered with the drafts tier. */
-export function registerDocumentDraftTools(
-  server: McpServer,
-  client: LexwareClient,
-  finalizeEnabled: boolean,
-): void {
+export function registerDocumentDraftTools(server: McpServer, client: LexwareClient): void {
   for (const doc of DOC_TYPES) {
     if (!doc.schema) continue;
     server.registerTool(
       {
         name: `create-draft-${doc.key}`,
         description:
-          `Create a ${doc.label}. By default a DRAFT (editable, not legally issued). Set finalize=true ` +
-          `(+ confirm_finalize; requires LEXWARE_ENABLE_FINALIZE) to issue a LEGALLY BINDING document in one ` +
-          `step — IRREVERSIBLE (no void/delete via API). Provide the full document body for a standalone ` +
-          `document; with precedingSalesVoucherId the body (line items/contact) is carried over from that ` +
-          `preceding voucher — dunnings can ONLY be created this way (pursue from an invoice).`,
+          `Create a DRAFT ${doc.label} (editable, not legally issued). Provide the full document body for a ` +
+          `standalone document; with precedingSalesVoucherId the body (line items/contact) is carried over ` +
+          `from that preceding voucher — dunnings can ONLY be created this way (pursue from an invoice). ` +
+          `To ISSUE a legally-binding document, use create-finalized-${doc.key} instead (finalize tier).`,
         inputSchema: {
           ...optionalShape(doc.schema),
           precedingSalesVoucherId: z
@@ -514,40 +495,33 @@ export function registerDocumentDraftTools(
               "Create as a follow-up of this preceding sales voucher id (e.g. quotation→order-confirmation→" +
                 "invoice, invoice→credit-note/dunning). POSTs ?precedingSalesVoucherId={id}.",
             ),
+          // Accepted only to fail LOUDLY: finalizing moved to create-finalized-* (finalize
+          // tier). Without these params the SDK would silently strip a stale finalize=true
+          // and create a draft while the caller believed it issued a binding document.
           finalize: jsonBool(z.boolean().optional()).describe(
-            "Issue a legally-binding FINALIZED document (POST ?finalize=true) instead of a draft. IRREVERSIBLE; " +
-              "requires LEXWARE_ENABLE_FINALIZE and confirm_finalize=true.",
+            `MOVED — create-draft-${doc.key} no longer finalizes. Use create-finalized-${doc.key} (finalize tier) to issue a legally-binding document.`,
           ),
-          confirm_finalize: z.literal(true).optional().describe("Must be true when finalize=true."),
+          confirm_finalize: jsonBool(z.boolean().optional()).describe(
+            `MOVED — see create-finalized-${doc.key}.`,
+          ),
+          additionalFields: additionalFieldsParam,
         },
         annotations: WRITE,
       },
-      async ({ finalize, confirm_finalize, precedingSalesVoucherId, ...input }) => {
+      async ({ precedingSalesVoucherId, additionalFields, finalize, confirm_finalize, ...input }) => {
+        if (finalize || confirm_finalize !== undefined) {
+          throw new Error(
+            `create-draft-${doc.key} does not finalize (that moved to a separate tool). To issue a ` +
+              `legally-binding ${doc.label}, use create-finalized-${doc.key} — requires LEXWARE_ENABLE_FINALIZE.`,
+          );
+        }
         const query: Record<string, string | boolean> = {};
         if (precedingSalesVoucherId) query.precedingSalesVoucherId = precedingSalesVoucherId;
-        let finalized = false;
-        if (finalize) {
-          if (!finalizeEnabled) {
-            throw new Error(
-              "Finalizing is disabled. Set LEXWARE_ENABLE_FINALIZE=true to issue a legally-binding document.",
-            );
-          }
-          if (confirm_finalize !== true) {
-            throw new Error(
-              "Set confirm_finalize=true to acknowledge this issues a legally binding, irreversible document.",
-            );
-          }
-          query.finalize = true;
-          finalized = true;
-        }
-        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, input, query);
+        const body = mergeBody(input, additionalFields);
+        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, body, query);
         return {
-          structuredContent: { ...created, finalized },
-          content: text(
-            finalized
-              ? `FINALIZED ${doc.label} ${created.id} (legally binding). This cannot be undone.`
-              : `Created DRAFT ${doc.label} ${created.id} (not finalized).`,
-          ),
+          structuredContent: { ...created, finalized: false },
+          content: text(`Created DRAFT ${doc.label} ${created.id} (not finalized).`),
         };
       },
     );
@@ -576,16 +550,18 @@ export function registerDocumentFinalizeTools(server: McpServer, client: Lexware
             .string()
             .optional()
             .describe("Create as a follow-up of this preceding sales voucher id."),
-          confirm_finalize: z
-            .literal(true)
-            .describe("Must be true to acknowledge this issues a legally binding document."),
+          confirm_finalize: jsonBool(z.literal(true)).describe(
+            "Must be true to acknowledge this issues a legally binding document.",
+          ),
+          additionalFields: additionalFieldsParam,
         },
         annotations: WRITE,
       },
-      async ({ confirm_finalize: _confirm, precedingSalesVoucherId, ...input }) => {
+      async ({ confirm_finalize: _confirm, precedingSalesVoucherId, additionalFields, ...input }) => {
         const query: Record<string, string | boolean> = { finalize: true };
         if (precedingSalesVoucherId) query.precedingSalesVoucherId = precedingSalesVoucherId;
-        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, input, query);
+        const body = mergeBody(input, additionalFields);
+        const created = await client.post<{ id: string }>(`/v1/${doc.path}`, body, query);
         return {
           structuredContent: { ...created, finalized: true },
           content: text(`FINALIZED ${doc.label} ${created.id} (legally binding). This cannot be undone.`),

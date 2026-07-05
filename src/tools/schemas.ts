@@ -4,10 +4,17 @@ import { DEFAULT_PAGE_SIZE } from "./shared.js";
 /**
  * Shared zod schemas for Lexware write payloads.
  *
- * These are intentionally lenient (`.passthrough()` keeps unknown keys) because
- * the full Lexware document schema is large and version-dependent. We validate
- * the load-bearing required fields and forward the rest untouched, so valid
- * requests aren't blocked by an incomplete model.
+ * These are intentionally lenient (`.passthrough()` keeps unknown keys on nested
+ * objects) because the full Lexware document schema is large and version-dependent.
+ * We validate the load-bearing required fields and forward the rest untouched.
+ *
+ * IMPORTANT: `.passthrough()` only preserves unknown keys INSIDE a typed sub-object.
+ * The MCP SDK compiles each tool's top-level input shape with a strip-mode
+ * `z.object`, so an unknown TOP-LEVEL field (e.g. `xRechnung` on an invoice) would
+ * be silently dropped before the handler runs. Every create tool therefore exposes an
+ * `additionalFields` escape hatch ({@link additionalFieldsParam}), merged into the
+ * request body via {@link mergeBody}, so a valid Lexware field we don't model can
+ * still be sent.
  */
 
 /**
@@ -44,6 +51,49 @@ export const versionParam = (noun: string) =>
   jsonNum(z.number().int().optional()).describe(
     `Current version from ${noun} (optimistic lock). Omit to use the latest.`,
   );
+
+/**
+ * Escape hatch for valid Lexware body fields not modeled by a create tool's shape.
+ * Top-level unknown keys are stripped by the SDK's strip-mode object (see the module
+ * doc), so pass any such fields here (e.g. { xRechnung: {...} }) to have them merged
+ * into the request body. Typed fields on the tool take precedence over these.
+ */
+export const additionalFieldsParam = jsonObj(z.record(z.string(), z.unknown()))
+  .optional()
+  .describe(
+    "Extra Lexware body fields not covered by this tool's parameters (e.g. xRechnung), merged into the " +
+      "request as-is. Use only for valid API fields the tool doesn't already expose.",
+  );
+
+/**
+ * Keys that must never be smuggled into a request body via {@link additionalFieldsParam}:
+ * they are query/control parameters (finalize is a query flag; version/id are managed by
+ * the tool), so accepting them in the body would defeat tier gating or optimistic locking.
+ */
+const RESERVED_BODY_KEYS = new Set([
+  "finalize",
+  "confirm_finalize",
+  "precedingSalesVoucherId",
+  "version",
+  "id",
+]);
+
+/**
+ * Build a create/update request body: the tool's typed `input` merged OVER the
+ * `additionalFields` escape hatch (so typed fields always win), with reserved
+ * control keys stripped from the escape hatch first.
+ */
+export function mergeBody(
+  input: Record<string, unknown>,
+  additionalFields: unknown,
+): Record<string, unknown> {
+  const extra =
+    additionalFields && typeof additionalFields === "object" && !Array.isArray(additionalFields)
+      ? { ...(additionalFields as Record<string, unknown>) }
+      : {};
+  for (const k of RESERVED_BODY_KEYS) delete extra[k];
+  return { ...extra, ...input };
+}
 
 /** Shared paging params for list tools (string-coerced). */
 export const pageParam = jsonNum(z.number().int().min(0).default(0)).describe("0-based page index.");
@@ -290,7 +340,9 @@ export const contactInputShape = {
   addresses: jsonObj(contactAddressesSchema).optional(),
   emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
   phoneNumbers: jsonObj(contactPhoneNumbersSchema).optional(),
-  archived: jsonBool(z.boolean().optional()).describe("Set true to create the contact archived (rare)."),
+  // NOTE: `archived` is deliberately not exposed — it is READ-ONLY on the Lexware
+  // contacts API (verified against the docs), so setting it here would be silently
+  // ignored. Archiving a contact is a web-app-only action; there is no delete either.
   note: z.string().optional(),
 } as const;
 
@@ -315,10 +367,9 @@ export const contactUpdateShape = {
   addresses: jsonObj(contactAddressesSchema).optional(),
   emailAddresses: jsonObj(contactEmailAddressesSchema).optional(),
   phoneNumbers: jsonObj(contactPhoneNumbersSchema).optional(),
-  archived: jsonBool(z.boolean().optional()).describe(
-    "Set true to archive the contact (hide a duplicate). lexoffice has no contact-merge or delete API, and a " +
-      "contact already referenced by documents may not be archivable.",
-  ),
+  // NOTE: `archived` is READ-ONLY on the Lexware contacts API — a PUT with archived:true
+  // is accepted (version bumps) but silently ignored. Archiving is web-app-only and there
+  // is no contact delete, so the param is not exposed (it would mislead the model).
   note: z.string().optional(),
 } as const;
 

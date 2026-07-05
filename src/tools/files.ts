@@ -1,7 +1,7 @@
-import { embeddedResource, type McpServer } from "skybridge/server";
+import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
-import { RO, WRITE, text } from "./shared.js";
+import { RO, WRITE, binaryResult, decodeBase64Strict, text } from "./shared.js";
 
 /** Read tools for the file store. Always registered. */
 export function registerFileReadTools(server: McpServer, client: LexwareClient): void {
@@ -25,17 +25,13 @@ export function registerFileReadTools(server: McpServer, client: LexwareClient):
         `/v1/files/${encodeURIComponent(id)}`,
         accept ?? "*/*",
       );
-      return {
+      return binaryResult({
+        uri: `lexware://files/${id}`,
+        data,
+        contentType,
         structuredContent: { fileId: id, mimeType: contentType, byteLength: data.length },
-        content: [
-          ...text(`Downloaded file ${id} (${data.length} bytes, ${contentType}).`),
-          embeddedResource({
-            uri: `lexware://files/${id}`,
-            mimeType: contentType,
-            blob: data.toString("base64"),
-          }),
-        ],
-      };
+        message: `Downloaded file ${id} (${data.length} bytes, ${contentType}).`,
+      });
     },
   );
 }
@@ -47,8 +43,8 @@ export function registerFileWriteTools(server: McpServer, client: LexwareClient)
       name: "upload-file",
       description:
         "Upload a file to Lexware's file store — the first step of attaching a receipt to a bookkeeping " +
-        "voucher. Provide the file as base64; returns the new file id to reference elsewhere. Keep files " +
-        "small (a few MB): the base64 travels inline in the request.",
+        "voucher. Provide the file as base64; returns the new file id to reference elsewhere. The base64 travels " +
+        "inline in the request (~12 MB body cap), so keep the source file under ~8 MB.",
       inputSchema: {
         fileBase64: z.string().describe("File contents, base64-encoded."),
         filename: z.string().describe('e.g. "receipt-2024-01.pdf".'),
@@ -62,7 +58,7 @@ export function registerFileWriteTools(server: McpServer, client: LexwareClient)
       annotations: WRITE,
     },
     async ({ fileBase64, filename, mimeType, type }) => {
-      const bytes = Buffer.from(fileBase64, "base64");
+      const bytes = decodeBase64Strict(fileBase64, "fileBase64");
       const created = await client.postMultipart<{ id: string }>(
         "/v1/files",
         { bytes, filename, contentType: mimeType },

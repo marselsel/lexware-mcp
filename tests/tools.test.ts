@@ -55,7 +55,6 @@ const DRAFT_TOOLS = [
   "create-draft-order-confirmation",
   "create-draft-delivery-note",
   "create-draft-dunning",
-  "create-event-subscription",
   // expansion: bookkeeping vouchers + receipts, file upload
   "create-voucher",
   "update-voucher",
@@ -69,9 +68,12 @@ const FINALIZE_TOOLS = [
   "create-finalized-order-confirmation",
   "create-finalized-delivery-note",
   "create-finalized-dunning",
-  "delete-event-subscription",
   // expansion: destructive article delete (finalize tier)
   "delete-article",
+  // event-subscription create + delete are gated together in the finalize tier: a webhook
+  // to an arbitrary external URL is exfiltration-capable, so it is opt-in, not default-on.
+  "create-event-subscription",
+  "delete-event-subscription",
 ];
 
 /** Capture which tool names get registered for a given config. */
@@ -111,5 +113,14 @@ describe("registerTools (tiered registration)", () => {
   it("never registers a disabled tier's tools", () => {
     const names = registeredNames(loadConfig(env({ LEXWARE_ENABLE_DRAFTS: "false" })));
     expect(names).toEqual([...READ_TOOLS].sort());
+  });
+
+  it("finalize implies drafts: enabling finalize with drafts off still registers drafts", () => {
+    // Guards against a config that exposes ONLY the irreversible create-finalized-*
+    // tools (no safe draft path).
+    const names = registeredNames(
+      loadConfig(env({ LEXWARE_ENABLE_DRAFTS: "false", LEXWARE_ENABLE_FINALIZE: "true" })),
+    );
+    expect(names).toEqual([...READ_TOOLS, ...DRAFT_TOOLS, ...FINALIZE_TOOLS].sort());
   });
 });

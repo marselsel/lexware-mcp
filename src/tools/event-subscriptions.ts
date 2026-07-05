@@ -1,7 +1,7 @@
 import type { McpServer } from "skybridge/server";
 import { z } from "zod";
 import type { LexwareClient } from "../lexware/client.js";
-import { DESTRUCTIVE, RO, text, WRITE } from "./shared.js";
+import { DESTRUCTIVE, RO, text, WRITE, deleteIdempotent } from "./shared.js";
 
 /** Read tools for event subscriptions (webhooks). Always registered. */
 export function registerEventSubscriptionReadTools(server: McpServer, client: LexwareClient): void {
@@ -31,16 +31,28 @@ export function registerEventSubscriptionReadTools(server: McpServer, client: Le
   );
 }
 
-/** Non-destructive write tools for event subscriptions. Registered with the drafts tier. */
+/**
+ * Write tools for event subscriptions (webhooks). Registered with the FINALIZE tier
+ * (off by default): a webhook streams financial events to an arbitrary external URL,
+ * so creating one is a data-exfiltration-capable operation and deleting one severs a
+ * possibly third-party integration. Both are gated behind an explicit opt-in and kept
+ * symmetric (whoever can create can delete). See registerTools in ./index.ts.
+ */
 export function registerEventSubscriptionWriteTools(server: McpServer, client: LexwareClient): void {
   server.registerTool(
     {
       name: "create-event-subscription",
       description:
-        "Subscribe a callback URL to a Lexware event type (webhook), e.g. eventType 'invoice.created'. The callback URL must serve a Grade-A HTTPS certificate.",
+        "Subscribe a callback URL to a Lexware event type (webhook), e.g. eventType 'invoice.created'. Sends future " +
+        "event notifications to an EXTERNAL URL, so treat the target as trusted. The callback URL must be https:// " +
+        "and serve a Grade-A HTTPS certificate.",
       inputSchema: {
         eventType: z.string().describe("e.g. 'invoice.created', 'invoice.status.changed'."),
-        callbackUrl: z.string().url().describe("HTTPS endpoint that will receive events."),
+        callbackUrl: z
+          .string()
+          .url()
+          .refine((u) => u.startsWith("https://"), { message: "callbackUrl must be https://." })
+          .describe("HTTPS endpoint that will receive events (Lexware requires a Grade-A HTTPS certificate)."),
       },
       annotations: WRITE,
     },
@@ -59,22 +71,31 @@ export function registerEventSubscriptionWriteTools(server: McpServer, client: L
 }
 
 /**
- * Destructive delete for event subscriptions. Registered with the finalize tier
- * (off by default) so an irreversible delete is never enabled by drafts alone.
+ * Delete (unsubscribe) an event subscription. Registered with the FINALIZE tier,
+ * symmetric with create-event-subscription (both are gated together): it can sever a
+ * webhook belonging to any integration on the org, so it stays behind the explicit
+ * opt-in rather than being available by default.
  */
 export function registerEventSubscriptionDeleteTools(server: McpServer, client: LexwareClient): void {
   server.registerTool(
     {
       name: "delete-event-subscription",
-      description: "Delete (unsubscribe) an event subscription by id. This is irreversible.",
+      description: "Delete (unsubscribe) an event subscription by id. Stops the webhook; recreate it to re-subscribe.",
       inputSchema: { id: z.string() },
       annotations: DESTRUCTIVE,
     },
     async ({ id }) => {
-      await client.request<unknown>("DELETE", `/v1/event-subscriptions/${encodeURIComponent(id)}`, { idempotent: true });
+      const { alreadyAbsent } = await deleteIdempotent(
+        client,
+        `/v1/event-subscriptions/${encodeURIComponent(id)}`,
+      );
       return {
-        structuredContent: { id, deleted: true },
-        content: text(`Deleted event subscription ${id}.`),
+        structuredContent: { id, deleted: true, alreadyAbsent },
+        content: text(
+          alreadyAbsent
+            ? `Event subscription ${id} was already absent (nothing to delete).`
+            : `Deleted event subscription ${id}.`,
+        ),
       };
     },
   );

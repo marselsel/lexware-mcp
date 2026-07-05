@@ -29,8 +29,20 @@ export class LexwareApiError extends Error {
   }
 }
 
+/** True for a {@link LexwareApiError} representing a 404 Not Found. */
+export function isNotFound(err: unknown): boolean {
+  return err instanceof LexwareApiError && err.kind === "not_found";
+}
+
 /** Max IssueList entries rendered into a message before we summarize the remainder. */
 const MAX_ISSUES = 25;
+/** Max characters of a raw error body rendered into a message (truncate, never drop). */
+const MAX_BODY_CHARS = 2000;
+
+/** Clamp a string to at most `max` chars, appending an ellipsis when truncated. */
+function clampText(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max)}…`;
+}
 
 /**
  * Build a safe, helpful message from a Lexware error response body.
@@ -58,8 +70,10 @@ export function describeErrorBody(status: number, statusText: string, body: unkn
       if (detail) parts.push(detail);
     }
     if (issues.length > MAX_ISSUES) parts.push(`…and ${issues.length - MAX_ISSUES} more`);
-  } else if (typeof body === "string" && body.trim() && body.length < 2000) {
-    parts.push(body.trim());
+  } else if (typeof body === "string" && body.trim()) {
+    // Truncate a long plain-text body (e.g. an HTML 5xx page) rather than dropping
+    // it — otherwise all upstream diagnostic detail would be lost.
+    parts.push(clampText(body.trim(), MAX_BODY_CHARS));
   }
 
   // Safety net: never silently drop a structured Lexware body we couldn't summarize.

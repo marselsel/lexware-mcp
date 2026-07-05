@@ -1,4 +1,4 @@
-import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { InsufficientScopeError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { createHash } from "node:crypto";
@@ -15,6 +15,12 @@ export interface OAuthSettings {
   verifyAudience: boolean;
   allowedEmailDomains: string[];
   userinfoUrl: string;
+  /** Authorization endpoint advertised in AS metadata. Defaults to `${issuer}/oauth2/authorize`. */
+  authorizationEndpoint: string;
+  /** Token endpoint advertised in AS metadata. Defaults to `${issuer}/oauth2/token`. */
+  tokenEndpoint: string;
+  /** Dynamic client registration endpoint advertised in AS metadata. Defaults to `${issuer}/oauth2/register`. */
+  registrationEndpoint: string;
 }
 
 /** True when `email`'s domain is in `allowed` (case-insensitive). Pure; unit-tested. */
@@ -34,13 +40,14 @@ export function isEmailDomainAllowed(email: string | undefined, allowed: string[
  * (a convenience proxy; modern clients discover the AS via the protected-resource doc).
  */
 export function buildOAuthMetadata(oauth: OAuthSettings): OAuthMetadata {
-  // `issuer` must be exact; endpoints join onto a slash-free base.
-  const base = oauth.issuer.replace(/\/+$/, "");
+  // `issuer` must be exact. The endpoints default to the WorkOS-AuthKit layout but
+  // are overridable (config), so non-WorkOS issuers (Auth0 uses /authorize and
+  // /oauth/token, Keycloak uses /protocol/openid-connect/*) advertise correctly.
   return {
     issuer: oauth.issuer,
-    authorization_endpoint: `${base}/oauth2/authorize`,
-    token_endpoint: `${base}/oauth2/token`,
-    registration_endpoint: `${base}/oauth2/register`,
+    authorization_endpoint: oauth.authorizationEndpoint,
+    token_endpoint: oauth.tokenEndpoint,
+    registration_endpoint: oauth.registrationEndpoint,
     jwks_uri: oauth.jwksUrl,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
@@ -158,7 +165,10 @@ export function createAccessTokenVerifier(oauth: OAuthSettings, deps: VerifierDe
         }
       }
       if (!isEmailDomainAllowed(email, oauth.allowedEmailDomains)) {
-        throw new InvalidTokenError("Your email domain is not permitted to use this server");
+        // 403, not 401: the token is valid, the user is simply not authorized. A 401
+        // (InvalidTokenError) would make clients discard the token and re-authenticate
+        // in a loop; InsufficientScopeError maps to 403 and terminates cleanly.
+        throw new InsufficientScopeError("Your email domain is not permitted to use this server");
       }
     }
 
