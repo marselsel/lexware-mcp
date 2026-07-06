@@ -118,6 +118,12 @@ export const lineItemSchema = z
     quantity: z.number().optional(),
     unitName: z.string().optional().describe('e.g. "piece", "hour".'),
     unitPrice: moneySchema.optional(),
+    optional: jsonBool(z.boolean().optional()).describe(
+      "Optional line item (Optionale Position): shown with its price but NOT counted in the document total.",
+    ),
+    alternative: jsonBool(z.boolean().optional()).describe(
+      "Alternative line item (Alternativposition): an alternative to another position; not counted in the total.",
+    ),
   })
   .passthrough();
 

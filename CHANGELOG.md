@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7]
+
+### Added
+- **Line items expose `optional` and `alternative`** on every document create tool (invoice, quotation,
+  credit-note, order-confirmation, delivery-note — shared `lineItemSchema`). `optional` marks an optional
+  position (shown with its price but not counted in the total); `alternative` marks an alternative position.
+  Both are string-coercible and forwarded to the Lexware API. Previously these lexoffice fields weren't
+  modelled, so the model had no way to know it could set them.
+
 ## [0.1.6]
 
 ### Fixed

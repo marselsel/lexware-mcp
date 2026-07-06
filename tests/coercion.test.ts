@@ -91,4 +91,22 @@ describe("JSON-string coercion (jsonObj) for object/array params", () => {
     expect(v.useCollectiveContact).toBe(false); // jsonBool coercion
     expect(v.totalGrossAmount).toBe(11.9); // jsonNum coercion
   });
+
+  it("keeps line-item optional/alternative flags (incl. from strings) so they reach the API", () => {
+    const parsed = parse(invoiceInputShape, {
+      voucherDate: "2026-07-06",
+      address: { contactId: "c1" },
+      totalPrice: { currency: "EUR" },
+      taxConditions: { taxType: "net" },
+      shippingConditions: { shippingType: "service" },
+      lineItems: [
+        { type: "custom", name: "Base", unitPrice: { currency: "EUR", netAmount: 100 } },
+        // second line item is optional; a string-serialising client sends "true"
+        { type: "custom", name: "Add-on", optional: "true", alternative: false, unitPrice: { currency: "EUR", netAmount: 50 } },
+      ],
+    }) as { lineItems: Array<Record<string, unknown>> };
+    expect(parsed.lineItems[0].optional).toBeUndefined(); // omitted → not sent
+    expect(parsed.lineItems[1].optional).toBe(true); // "true" coerced and preserved
+    expect(parsed.lineItems[1].alternative).toBe(false);
+  });
 });
